@@ -6,6 +6,30 @@ namespace EBR.UnitTests;
 public sealed class RiskFormulaServiceTests
 {
     [Fact]
+    public void DuplicateFactorsCannotIncreaseEstablishmentRisk()
+    {
+        var input = new RiskFormulaInput([2m], [new("BPM", 1m, .5m), new("BPM", 1m, .5m)],
+            [new(1m, true, 24m, "LOW", 12)]);
+        Assert.Throws<ArgumentException>(() => new RiskFormulaService().Calculate(input));
+    }
+
+    [Fact]
+    public void OverlappingBandsAreRejectedInsteadOfTakingTheFirst()
+    {
+        var input = new RiskFormulaInput([4m], [new("BPM", 1m, 1m)],
+            [new(1m, true, 6.3m, "LOW", 12), new(3.6m, false, 24m, "HIGH", 3)]);
+        Assert.Throws<InvalidOperationException>(() => new RiskFormulaService().Calculate(input));
+    }
+
+    [Fact]
+    public void UnknownProductRiskCannotBeRepresentedByZero()
+    {
+        var input = new RiskFormulaInput([0m], [new("BPM", 1m, 1m)],
+            [new(0m, true, 24m, "LOW", 12)]);
+        Assert.Throws<ArgumentException>(() => new RiskFormulaService().Calculate(input));
+    }
+
+    [Fact]
     public void CalculateUsesMaximumProductRiskWeightedEstablishmentRiskAndMatchingFrequency()
     {
         var service = new RiskFormulaService();

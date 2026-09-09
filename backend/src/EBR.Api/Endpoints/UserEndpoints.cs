@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using EBR.Domain.Identity;
 using EBR.Infrastructure.Identity;
+using EBR.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -23,7 +24,9 @@ public static class UserEndpoints
 
     private static async Task<IResult> GetCurrentAsync(
         ClaimsPrincipal principal,
-        UserManager<ApplicationUser> userManager)
+        UserManager<ApplicationUser> userManager,
+        EbrDbContext context,
+        CancellationToken cancellationToken)
     {
         var identifier = principal.FindFirstValue(ClaimTypes.NameIdentifier);
         var user = Guid.TryParse(identifier, out var userId)
@@ -35,13 +38,23 @@ public static class UserEndpoints
         }
 
         var roles = await userManager.GetRolesAsync(user);
+        // Empresas autorizadas: el join real contra Empresa_Usuario. Los roles que no se
+        // asocian a una empresa concreta (ADMINISTRADOR, COORDINADOR, TECNICO_EVALUADOR)
+        // simplemente no tienen filas en Empresa_Usuario, así que obtienen lista vacía sin
+        // necesidad de una regla especial por rol.
+        var authorizedCompanyIds = await context.CompanyUsers.AsNoTracking()
+            .Where(link => link.UserId == user.Id)
+            .OrderBy(link => link.CompanyId)
+            .Select(link => link.CompanyId)
+            .ToListAsync(cancellationToken);
+
         return Results.Ok(new
         {
             user.Id,
             Email = user.Email ?? string.Empty,
             user.FullName,
             Role = roles.Single(),
-            AuthorizedCompanyIds = Array.Empty<Guid>()
+            AuthorizedCompanyIds = authorizedCompanyIds
         });
     }
 

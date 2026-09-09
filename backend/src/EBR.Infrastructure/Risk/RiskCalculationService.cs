@@ -19,41 +19,36 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
         RiskCalculationCommand command,
         CancellationToken cancellationToken)
     {
-        var productScores = await context.CompanyFoodSubcategories
-            .Where(link => link.CompanyId == command.CompanyId)
-            .Join(context.FoodSubcategories, link => link.SubcategoryId, item => item.Id, (_, item) => new
-            {
-                item.Id,
-                item.Name,
-                item.TotalScore
-            })
-            .ToListAsync(cancellationToken);
-        if (productScores.Count == 0) throw new ArgumentException("La empresa no tiene subcategorías configuradas.", nameof(command));
-
-        var factorSnapshots = new List<FactorSnapshot>();
-        foreach (var selection in command.FactorSelections)
+        var now = DateTimeOffset.UtcNow;
+        var ruleVersion = await context.RiskRuleVersions
+            .Where(version => version.IsActive && version.EffectiveFrom <= now &&
+                (version.EffectiveTo == null || version.EffectiveTo > now))
+            .OrderByDescending(version => version.Version)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (ruleVersion is { IsPublished: false })
         {
-            var selected = await context.StructuralRiskOptions
-                .Where(option => option.Id == selection.OptionId && option.FactorId == selection.FactorId)
-                .Join(context.StructuralRiskFactors, option => option.FactorId, factor => factor.Id, (option, factor) => new
-                {
-                    Factor = factor,
-                    Option = option
-                })
-                .SingleOrDefaultAsync(cancellationToken)
-                ?? throw new ArgumentException("Una opción no pertenece al factor indicado.", nameof(command));
-            factorSnapshots.Add(new FactorSnapshot(
-                selected.Factor.Id,
-                selected.Factor.Code,
-                selected.Factor.Name,
-                selected.Factor.Weight,
-                selected.Option.Id,
-                selected.Option.Description,
-                selected.Option.Score));
+            throw new InvalidOperationException(
+                "La versión vigente de reglas de riesgo no está publicada y no puede utilizarse.");
         }
-        if (factorSnapshots.Count == 0) throw new ArgumentException("Debe seleccionar al menos un factor.", nameof(command));
 
-        var matrices = await context.InspectionFrequencyMatrices
+        var subcategoryIds = await context.CompanyFoodSubcategories
+            .Where(link => link.CompanyId == command.CompanyId)
+            .Select(link => link.SubcategoryId)
+            .ToListAsync(cancellationToken);
+        if (subcategoryIds.Count == 0)
+            throw new ArgumentException("La empresa no tiene subcategorías configuradas.", nameof(command));
+
+        var products = ruleVersion is null
+            ? await LegacyProductScoresAsync(subcategoryIds, cancellationToken)
+            : await HazardProductScoresAsync(subcategoryIds, ruleVersion, cancellationToken);
+        if (products.Count == 0)
+        {
+            throw new ArgumentException(
+                "No existen peligros conocidos para las subcategorías de la empresa.", nameof(command));
+        }
+
+        var factorSnapshots = await BuildFactorSnapshotsAsync(command, ruleVersion, cancellationToken);
+        var matrices = await BandsOf(ruleVersion)
             .Join(context.RiskLevels, matrix => matrix.RiskLevelId, level => level.Id, (matrix, level) => new
             {
                 Matrix = matrix,
@@ -61,7 +56,7 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
             })
             .ToListAsync(cancellationToken);
         var formula = formulaService.Calculate(new RiskFormulaInput(
-            productScores.Select(item => item.TotalScore).ToArray(),
+            products.Select(item => item.Score).ToArray(),
             factorSnapshots.Select(item => new RiskFactorInput(item.Code, item.Score, item.Weight)).ToArray(),
             matrices.Select(item => new RiskFrequencyBand(
                 item.Matrix.RiskMin,
@@ -73,7 +68,6 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
             (item.Matrix.MinimumIncluded ? formula.TotalRisk >= item.Matrix.RiskMin : formula.TotalRisk > item.Matrix.RiskMin) &&
             formula.TotalRisk <= item.Matrix.RiskMax);
 
-        var now = DateTimeOffset.UtcNow;
         var selectedFactorIds = factorSnapshots.Select(item => item.FactorId).ToArray();
         var currentValues = await context.CompanyRiskFactorValues.Where(item =>
             item.CompanyId == command.CompanyId && item.IsCurrent && selectedFactorIds.Contains(item.FactorId))
@@ -91,12 +85,23 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
 
         var snapshot = JsonSerializer.Serialize(new
         {
-            products = productScores,
+            ruleVersion = ruleVersion is null
+                ? null
+                : new
+                {
+                    id = ruleVersion.Id,
+                    version = ruleVersion.Version,
+                    aggregationMethod = ruleVersion.AggregationMethod,
+                    productScaleId = ruleVersion.ProductScaleId,
+                    frequencyScaleId = ruleVersion.FrequencyScaleId
+                },
+            products,
             factors = factorSnapshots,
             formula = new { formula.ProductRisk, formula.EstablishmentRisk, formula.TotalRisk }
         }, SnapshotJsonOptions);
         var calculation = new RiskCalculation
         {
+            RuleVersionId = ruleVersion?.Id,
             CompanyId = command.CompanyId,
             CalculatedAt = now,
             ProductRisk = formula.ProductRisk,
@@ -121,6 +126,91 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
             calculation.CalculatedAt.AddMonths(matched.Matrix.FrequencyMonths),
             calculation.FactorDetailsJson);
     }
+
+    private IQueryable<InspectionFrequencyMatrix> BandsOf(RiskRuleVersion? ruleVersion)
+    {
+        if (ruleVersion is null) return context.InspectionFrequencyMatrices.Where(matrix => matrix.RuleVersionId == null);
+        var ruleVersionId = ruleVersion.Id;
+        return context.InspectionFrequencyMatrices.Where(matrix => matrix.RuleVersionId == ruleVersionId);
+    }
+
+    private async Task<List<ProductSnapshot>> LegacyProductScoresAsync(
+        IReadOnlyList<int> subcategoryIds,
+        CancellationToken cancellationToken) =>
+        await context.FoodSubcategories
+            .Where(item => subcategoryIds.Contains(item.Id) && item.TotalScore > 0)
+            .Select(item => new ProductSnapshot(item.Id, item.Name, "TOTAL", item.TotalScore!.Value))
+            .ToListAsync(cancellationToken);
+
+    private async Task<List<ProductSnapshot>> HazardProductScoresAsync(
+        IReadOnlyList<int> subcategoryIds,
+        RiskRuleVersion ruleVersion,
+        CancellationToken cancellationToken) =>
+        await context.FoodSubcategoryHazards
+            .Where(hazard => subcategoryIds.Contains(hazard.SubcategoryId))
+            .Join(context.RiskScaleLevels.Where(level => level.ScaleId == ruleVersion.ProductScaleId),
+                hazard => hazard.LevelId,
+                level => level.Id,
+                (hazard, level) => new { hazard, level })
+            .Join(context.FoodSubcategories,
+                item => item.hazard.SubcategoryId,
+                subcategory => subcategory.Id,
+                (item, subcategory) => new ProductSnapshot(
+                    subcategory.Id,
+                    subcategory.Name,
+                    item.hazard.HazardType,
+                    item.hazard.ScoreOverride ?? item.level.Score))
+            .ToListAsync(cancellationToken);
+
+    private async Task<List<FactorSnapshot>> BuildFactorSnapshotsAsync(
+        RiskCalculationCommand command,
+        RiskRuleVersion? ruleVersion,
+        CancellationToken cancellationToken)
+    {
+        var selections = command.FactorSelections;
+        if (selections.Count == 0)
+            throw new ArgumentException("Debe seleccionar al menos un factor.", nameof(command));
+        if (selections.Select(selection => selection.FactorId).Distinct().Count() != selections.Count)
+            throw new ArgumentException("No se permiten factores duplicados.", nameof(command));
+        if (ruleVersion is not null)
+        {
+            var required = await context.StructuralRiskFactors
+                .Where(factor => factor.RuleVersionId == ruleVersion.Id && factor.IsActive)
+                .Select(factor => factor.Id)
+                .ToListAsync(cancellationToken);
+            if (!required.OrderBy(id => id).SequenceEqual(selections.Select(item => item.FactorId).OrderBy(id => id)))
+            {
+                throw new ArgumentException(
+                    "La selección debe cubrir exactamente los factores activos de la versión de reglas.", nameof(command));
+            }
+        }
+
+        var snapshots = new List<FactorSnapshot>();
+        foreach (var selection in selections)
+        {
+            var selected = await context.StructuralRiskOptions
+                .Where(option => option.Id == selection.OptionId && option.FactorId == selection.FactorId)
+                .Join(context.StructuralRiskFactors, option => option.FactorId, factor => factor.Id, (option, factor) => new
+                {
+                    Factor = factor,
+                    Option = option
+                })
+                .SingleOrDefaultAsync(cancellationToken)
+                ?? throw new ArgumentException("Una opción no pertenece al factor indicado.", nameof(command));
+            snapshots.Add(new FactorSnapshot(
+                selected.Factor.Id,
+                selected.Factor.Code,
+                selected.Factor.Name,
+                selected.Factor.Weight,
+                selected.Option.Id,
+                selected.Option.Description,
+                selected.Option.Score));
+        }
+
+        return snapshots;
+    }
+
+    private sealed record ProductSnapshot(int SubcategoryId, string Name, string HazardType, decimal Score);
 
     private sealed record FactorSnapshot(
         int FactorId,

@@ -32,13 +32,151 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
     public DbSet<CompanyRiskFactorValue> CompanyRiskFactorValues => Set<CompanyRiskFactorValue>();
     public DbSet<InspectionFrequencyMatrix> InspectionFrequencyMatrices => Set<InspectionFrequencyMatrix>();
     public DbSet<RiskCalculation> RiskCalculations => Set<RiskCalculation>();
+    public DbSet<RiskScale> RiskScales => Set<RiskScale>();
+    public DbSet<RiskScaleLevel> RiskScaleLevels => Set<RiskScaleLevel>();
+    public DbSet<FoodSubcategoryHazard> FoodSubcategoryHazards => Set<FoodSubcategoryHazard>();
+    public DbSet<RiskRuleVersion> RiskRuleVersions => Set<RiskRuleVersion>();
     public DbSet<EvaluationTemplate> EvaluationTemplates => Set<EvaluationTemplate>();
     public DbSet<EvaluationTemplateItem> EvaluationTemplateItems => Set<EvaluationTemplateItem>();
+    public DbSet<EvaluationResponseOption> EvaluationResponseOptions => Set<EvaluationResponseOption>();
+    public DbSet<EvaluationGuidanceCriterion> EvaluationGuidanceCriteria => Set<EvaluationGuidanceCriterion>();
+    public DbSet<EvaluationQualificationRule> EvaluationQualificationRules => Set<EvaluationQualificationRule>();
+    public DbSet<EvaluationImportBatch> EvaluationImportBatches => Set<EvaluationImportBatch>();
+    public DbSet<EvaluationImportRow> EvaluationImportRows => Set<EvaluationImportRow>();
     public DbSet<BpmRequest> BpmRequests => Set<BpmRequest>();
     public DbSet<InspectionCase> InspectionCases => Set<InspectionCase>();
     public DbSet<CaseStateHistory> CaseStateHistories => Set<CaseStateHistory>();
     public DbSet<HealthAlert> HealthAlerts => Set<HealthAlert>();
     public DbSet<Complaint> Complaints => Set<Complaint>();
+
+    public const int PublishedRuleFactorCount = 6;
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        EnforceRiskInvariants();
+        EnforceTemplateInvariants();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(
+        bool acceptAllChangesOnSuccess,
+        CancellationToken cancellationToken = default)
+    {
+        EnforceRiskInvariants();
+        EnforceTemplateInvariants();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void EnforceRiskInvariants()
+    {
+        ChangeTracker.DetectChanges();
+        if (ChangeTracker.Entries<RiskCalculation>().Any(entry =>
+                entry.State is EntityState.Modified or EntityState.Deleted))
+        {
+            throw new InvalidOperationException(
+                "Un cálculo de riesgo registrado es inmutable y no admite modificación ni eliminación.");
+        }
+
+        foreach (var ruleVersionId in PendingPublishedRuleVersionIds())
+        {
+            var factors = ActiveFactorsOf(ruleVersionId);
+            if (factors.Count != PublishedRuleFactorCount)
+            {
+                throw new InvalidOperationException(
+                    $"Una versión publicada de reglas de riesgo requiere {PublishedRuleFactorCount} factores activos.");
+            }
+
+            if (factors.Sum(factor => factor.Weight) != 1m)
+            {
+                throw new InvalidOperationException(
+                    "Los pesos de los factores de una versión publicada deben sumar exactamente 1.");
+            }
+        }
+    }
+
+    private HashSet<int> PendingPublishedRuleVersionIds()
+    {
+        var versions = ChangeTracker.Entries<RiskRuleVersion>()
+            .Where(entry => entry.State is EntityState.Added or EntityState.Modified)
+            .Select(entry => entry.Entity)
+            .ToList();
+        var candidates = versions.Where(version => version.IsPublished).Select(version => version.Id).ToHashSet();
+        foreach (var factorVersionId in ChangeTracker.Entries<StructuralRiskFactor>()
+            .Where(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            .Select(entry => entry.Entity.RuleVersionId)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct())
+        {
+            var known = versions.SingleOrDefault(version => version.Id == factorVersionId) ??
+                RiskRuleVersions.SingleOrDefault(version => version.Id == factorVersionId);
+            if (known is { IsPublished: true }) candidates.Add(factorVersionId);
+        }
+
+        return candidates;
+    }
+
+    private List<StructuralRiskFactor> ActiveFactorsOf(int ruleVersionId)
+    {
+        var removed = ChangeTracker.Entries<StructuralRiskFactor>()
+            .Where(entry => entry.State == EntityState.Deleted)
+            .Select(entry => entry.Entity)
+            .ToHashSet();
+        var stored = StructuralRiskFactors.Where(factor => factor.RuleVersionId == ruleVersionId).ToList();
+        var added = ChangeTracker.Entries<StructuralRiskFactor>()
+            .Where(entry => entry.State == EntityState.Added && entry.Entity.RuleVersionId == ruleVersionId)
+            .Select(entry => entry.Entity);
+        return stored.Concat(added)
+            .Distinct()
+            .Where(factor => factor.IsActive && factor.RuleVersionId == ruleVersionId && !removed.Contains(factor))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Una versión publicada de plantilla es inmutable: no admite cambios en su cabecera ni altas,
+    /// modificaciones o bajas de ítems, opciones, criterios o reglas de calificación. La misma
+    /// invariante se duplica en PostgreSQL con el disparador <c>tr_plantilla_publicada_inmutable</c>.
+    /// </summary>
+    private void EnforceTemplateInvariants()
+    {
+        ChangeTracker.DetectChanges();
+        foreach (var entry in ChangeTracker.Entries<EvaluationTemplate>()
+            .Where(entry => entry.State is EntityState.Modified or EntityState.Deleted))
+        {
+            var original = entry.Property(template => template.Status).OriginalValue;
+            if (original != EvaluationTemplateStatuses.Draft) throw ImmutableTemplate();
+        }
+
+        var touched = TouchedTemplateIds<EvaluationTemplateItem>(item => item.TemplateId);
+        touched.UnionWith(TouchedTemplateIds<EvaluationResponseOption>(option => option.TemplateId));
+        touched.UnionWith(TouchedTemplateIds<EvaluationQualificationRule>(rule => rule.TemplateId));
+        var criteriaItemIds = ChangeTracker.Entries<EvaluationGuidanceCriterion>()
+            .Where(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            .Select(entry => entry.Entity.ItemId)
+            .ToHashSet();
+        if (criteriaItemIds.Count > 0)
+        {
+            touched.UnionWith(EvaluationTemplateItems
+                .Where(item => criteriaItemIds.Contains(item.Id))
+                .Select(item => item.TemplateId));
+        }
+
+        if (touched.Count == 0) return;
+        if (EvaluationTemplates.Any(template =>
+                touched.Contains(template.Id) && template.Status != EvaluationTemplateStatuses.Draft))
+        {
+            throw ImmutableTemplate();
+        }
+    }
+
+    private HashSet<int> TouchedTemplateIds<TEntity>(Func<TEntity, int> templateId) where TEntity : class =>
+        ChangeTracker.Entries<TEntity>()
+            .Where(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
+            .Select(entry => templateId(entry.Entity))
+            .ToHashSet();
+
+    private static InvalidOperationException ImmutableTemplate() =>
+        new("Una versión publicada de plantilla de evaluación es inmutable.");
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -212,7 +350,7 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
             entity.Property(item => item.TemplateId).HasColumnName("plantilla_id");
             entity.Property(item => item.ParentId).HasColumnName("padre_id");
             entity.Property(item => item.Code).HasColumnName("codigo").HasMaxLength(50);
-            entity.Property(item => item.Description).HasColumnName("descripcion").HasMaxLength(2000);
+            entity.Property(item => item.Description).HasColumnName("descripcion").HasColumnType("text");
             entity.Property(item => item.ItemType).HasColumnName("tipo_item").HasMaxLength(20);
             entity.Property(item => item.Order).HasColumnName("orden");
             entity.Property(item => item.Weight).HasColumnName("peso").HasPrecision(9, 3);
@@ -227,16 +365,152 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
             entity.HasOne<EvaluationTemplate>().WithMany().HasForeignKey(item => item.TemplateId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<EvaluationTemplateItem>().WithMany().HasForeignKey(item => item.ParentId).OnDelete(DeleteBehavior.Restrict);
         });
+        builder.Entity<EvaluationResponseOption>(entity =>
+        {
+            entity.ToTable("Plantilla_Evaluacion_Opcion", table => table.HasCheckConstraint(
+                "CK_Opcion_Evaluable",
+                "(valor IS NULL AND NOT cuenta_denominador) OR (valor IS NOT NULL AND cuenta_denominador AND valor BETWEEN 0 AND 1)"));
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => new { item.TemplateId, item.Code }).IsUnique();
+            entity.Property(item => item.TemplateId).HasColumnName("plantilla_id");
+            entity.Property(item => item.Code).HasColumnName("codigo").HasMaxLength(5);
+            entity.Property(item => item.Name).HasColumnName("nombre").HasColumnType("text");
+            entity.Property(item => item.Value).HasColumnName("valor").HasPrecision(4, 2);
+            entity.Property(item => item.CountsTowardDenominator).HasColumnName("cuenta_denominador");
+            entity.Property(item => item.Order).HasColumnName("orden");
+            entity.HasOne<EvaluationTemplate>().WithMany().HasForeignKey(item => item.TemplateId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<EvaluationGuidanceCriterion>(entity =>
+        {
+            entity.ToTable("Plantilla_Evaluacion_Criterio", table => table.HasCheckConstraint(
+                "CK_Criterio_Criticidad",
+                "criticidad IS NULL OR criticidad IN ('CRITICAL','MAJOR','MINOR')"));
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => new { item.ItemId, item.Code }).IsUnique();
+            entity.Property(item => item.ItemId).HasColumnName("item_id");
+            entity.Property(item => item.Code).HasColumnName("codigo").HasMaxLength(10);
+            entity.Property(item => item.Description).HasColumnName("descripcion").HasColumnType("text");
+            entity.Property(item => item.Criticality).HasColumnName("criticidad").HasMaxLength(10);
+            entity.Property(item => item.SourceSheet).HasColumnName("hoja_origen").HasMaxLength(60);
+            entity.Property(item => item.SourceCell).HasColumnName("celda_origen").HasMaxLength(10);
+            entity.Property(item => item.Order).HasColumnName("orden");
+            entity.HasOne<EvaluationTemplateItem>().WithMany().HasForeignKey(item => item.ItemId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<EvaluationQualificationRule>(entity =>
+        {
+            entity.ToTable("Plantilla_Evaluacion_Regla", table => table.HasCheckConstraint(
+                "CK_Regla_Calificacion",
+                "porcentaje_min IS NOT NULL OR porcentaje_max IS NOT NULL"));
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => new { item.TemplateId, item.Code }).IsUnique();
+            entity.Property(item => item.TemplateId).HasColumnName("plantilla_id");
+            entity.Property(item => item.Code).HasColumnName("codigo").HasMaxLength(10);
+            entity.Property(item => item.Description).HasColumnName("descripcion").HasColumnType("text");
+            entity.Property(item => item.Classification).HasColumnName("clasificacion").HasColumnType("text");
+            entity.Property(item => item.Action).HasColumnName("accion").HasColumnType("text");
+            entity.Property(item => item.MinPercentage).HasColumnName("porcentaje_min").HasPrecision(5, 2);
+            entity.Property(item => item.MinIncluded).HasColumnName("minimo_incluido");
+            entity.Property(item => item.MaxPercentage).HasColumnName("porcentaje_max").HasPrecision(5, 2);
+            entity.Property(item => item.MaxIncluded).HasColumnName("maximo_incluido");
+            entity.Property(item => item.Order).HasColumnName("orden");
+            entity.HasOne<EvaluationTemplate>().WithMany().HasForeignKey(item => item.TemplateId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<EvaluationImportBatch>(entity =>
+        {
+            entity.ToTable("Plantilla_Importacion_Lote", table => table.HasCheckConstraint(
+                "CK_Lote_Estado", "estado IN ('PENDIENTE','PROMOVIDO','RECHAZADO')"));
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => new { item.FileName, item.SheetName, item.ContentHash }).IsUnique();
+            entity.Property(item => item.FileName).HasColumnName("archivo").HasMaxLength(260);
+            entity.Property(item => item.SheetName).HasColumnName("hoja").HasMaxLength(60);
+            entity.Property(item => item.ContentHash).HasColumnName("hash_contenido").HasMaxLength(64);
+            entity.Property(item => item.Status).HasColumnName("estado").HasMaxLength(15);
+            entity.Property(item => item.CreatedAt).HasColumnName("fecha_creacion");
+            entity.Property(item => item.CreatedBy).HasColumnName("creado_por");
+            entity.Property(item => item.TemplateId).HasColumnName("plantilla_id");
+            entity.Property(item => item.ErrorDetail).HasColumnName("detalle_error").HasColumnType("text");
+            entity.HasOne<EvaluationTemplate>().WithMany().HasForeignKey(item => item.TemplateId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<EvaluationImportRow>(entity =>
+        {
+            entity.ToTable("Plantilla_Importacion_Fila", table => table.HasCheckConstraint(
+                "CK_Fila_Estado", "estado IN ('PENDIENTE','PROMOVIDO','RECHAZADO')"));
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => new { item.BatchId, item.Code }).IsUnique();
+            entity.Property(item => item.BatchId).HasColumnName("lote_id");
+            entity.Property(item => item.SourceCell).HasColumnName("celda_origen").HasMaxLength(10);
+            entity.Property(item => item.Code).HasColumnName("codigo").HasMaxLength(50);
+            entity.Property(item => item.ParentCode).HasColumnName("codigo_padre").HasMaxLength(50);
+            entity.Property(item => item.Description).HasColumnName("descripcion").HasColumnType("text");
+            entity.Property(item => item.ItemType).HasColumnName("tipo_item").HasMaxLength(20);
+            entity.Property(item => item.Order).HasColumnName("orden");
+            entity.Property(item => item.Status).HasColumnName("estado").HasMaxLength(15);
+            entity.Property(item => item.ErrorDetail).HasColumnName("detalle_error").HasColumnType("text");
+            entity.HasOne<EvaluationImportBatch>().WithMany().HasForeignKey(item => item.BatchId).OnDelete(DeleteBehavior.Cascade);
+        });
     }
 
     private static void ConfigureRiskCatalogs(ModelBuilder builder)
     {
+        builder.Entity<RiskScale>(entity =>
+        {
+            entity.ToTable("Escala_Riesgo", table => table.HasCheckConstraint("CK_Escala_Vigencia", "vigente_hasta IS NULL OR vigente_hasta > vigente_desde"));
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => new { item.Code, item.Version }).IsUnique();
+            entity.Property(item => item.Code).HasColumnName("codigo").HasMaxLength(30);
+            entity.Property(item => item.Name).HasColumnName("nombre").HasColumnType("text");
+            entity.Property(item => item.Version).HasColumnName("version");
+            entity.Property(item => item.EffectiveFrom).HasColumnName("vigente_desde");
+            entity.Property(item => item.EffectiveTo).HasColumnName("vigente_hasta");
+            entity.Property(item => item.IsActive).HasColumnName("activo");
+            entity.HasMany(item => item.Levels).WithOne().HasForeignKey(item => item.ScaleId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<RiskScaleLevel>(entity =>
+        {
+            entity.ToTable("Escala_Riesgo_Nivel", table => table.HasCheckConstraint("CK_Nivel_Valido", "codigo IN ('LOW','MEDIUM','HIGH') AND puntaje > 0 AND orden BETWEEN 1 AND 3"));
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => new { item.ScaleId, item.Code }).IsUnique();
+            entity.HasIndex(item => new { item.ScaleId, item.Rank }).IsUnique();
+            entity.Property(item => item.ScaleId).HasColumnName("escala_id");
+            entity.Property(item => item.Code).HasColumnName("codigo").HasMaxLength(10);
+            entity.Property(item => item.Name).HasColumnName("nombre").HasColumnType("text");
+            entity.Property(item => item.Score).HasColumnName("puntaje").HasPrecision(8, 3);
+            entity.Property(item => item.Rank).HasColumnName("orden");
+        });
+        builder.Entity<FoodSubcategoryHazard>(entity =>
+        {
+            entity.ToTable("Subcategoria_Alimento_Peligro", table => table.HasCheckConstraint("CK_Peligro_Valido", "tipo_peligro IN ('MICROBIOLOGICAL','CHEMICAL') AND (puntaje_propio IS NULL OR puntaje_propio > 0)"));
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => new { item.SubcategoryId, item.HazardType }).IsUnique();
+            entity.Property(item => item.SubcategoryId).HasColumnName("subcategoria_id");
+            entity.Property(item => item.HazardType).HasColumnName("tipo_peligro").HasMaxLength(20);
+            entity.Property(item => item.LevelId).HasColumnName("nivel_escala_id");
+            entity.Property(item => item.ScoreOverride).HasColumnName("puntaje_propio").HasPrecision(8, 3);
+            entity.HasOne<FoodSubcategory>().WithMany().HasForeignKey(item => item.SubcategoryId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<RiskScaleLevel>().WithMany().HasForeignKey(item => item.LevelId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<RiskRuleVersion>(entity =>
+        {
+            entity.ToTable("Version_Regla_Riesgo", table => table.HasCheckConstraint("CK_Regla_Valida", "metodo_agregacion = 'MAX' AND (vigente_hasta IS NULL OR vigente_hasta > vigente_desde)"));
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => item.Version).IsUnique();
+            entity.Property(item => item.Version).HasColumnName("version");
+            entity.Property(item => item.EffectiveFrom).HasColumnName("vigente_desde");
+            entity.Property(item => item.EffectiveTo).HasColumnName("vigente_hasta");
+            entity.Property(item => item.IsActive).HasColumnName("activo");
+            entity.Property(item => item.IsPublished).HasColumnName("publicado");
+            entity.Property(item => item.AggregationMethod).HasColumnName("metodo_agregacion").HasMaxLength(10);
+            entity.Property(item => item.ProductScaleId).HasColumnName("escala_producto_id");
+            entity.Property(item => item.FrequencyScaleId).HasColumnName("escala_frecuencia_id");
+            entity.HasOne<RiskScale>().WithMany().HasForeignKey(item => item.ProductScaleId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<RiskScale>().WithMany().HasForeignKey(item => item.FrequencyScaleId).OnDelete(DeleteBehavior.Restrict);
+        });
         builder.Entity<FoodCategory>(entity =>
         {
             entity.ToTable("Categoria_Alimento");
             entity.HasKey(item => item.Id);
             entity.HasIndex(item => item.Name).IsUnique();
-            entity.Property(item => item.Name).HasColumnName("nombre").HasMaxLength(120);
+            entity.Property(item => item.Name).HasColumnName("nombre").HasColumnType("text");
         });
         builder.Entity<FoodSubcategory>(entity =>
         {
@@ -244,7 +518,7 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
             entity.HasKey(item => item.Id);
             entity.HasIndex(item => new { item.CategoryId, item.Name }).IsUnique();
             entity.Property(item => item.CategoryId).HasColumnName("categoria_id");
-            entity.Property(item => item.Name).HasColumnName("nombre").HasMaxLength(160);
+            entity.Property(item => item.Name).HasColumnName("nombre").HasColumnType("text");
             entity.Property(item => item.MicrobiologicalRiskLevelId).HasColumnName("riesgo_micro_id");
             entity.Property(item => item.MicrobiologicalScore).HasColumnName("puntaje_micro").HasPrecision(8, 3);
             entity.Property(item => item.ChemicalRiskLevelId).HasColumnName("riesgo_quimi_id");
@@ -269,7 +543,10 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
         {
             entity.ToTable("Factor_Riesgo_Establecimiento");
             entity.HasKey(item => item.Id);
-            entity.HasIndex(item => item.Code).IsUnique();
+            entity.HasIndex(item => new { item.RuleVersionId, item.Code }).IsUnique();
+            entity.HasOne<RiskRuleVersion>().WithMany().HasForeignKey(item => item.RuleVersionId).OnDelete(DeleteBehavior.Restrict);
+            entity.Property(item => item.RuleVersionId).HasColumnName("version_regla_id");
+            entity.Property(item => item.IsActive).HasColumnName("activo");
             entity.Property(item => item.Code).HasColumnName("codigo").HasMaxLength(30);
             entity.Property(item => item.Name).HasColumnName("nombre").HasMaxLength(160);
             entity.Property(item => item.Weight).HasColumnName("peso").HasPrecision(8, 4);
@@ -306,6 +583,10 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
         {
             entity.ToTable("Matriz_Frecuencia_Inspeccion");
             entity.HasKey(item => item.Id);
+            entity.HasOne<RiskRuleVersion>().WithMany().HasForeignKey(item => item.RuleVersionId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<RiskScaleLevel>().WithMany().HasForeignKey(item => item.ScaleLevelId).OnDelete(DeleteBehavior.Restrict);
+            entity.Property(item => item.RuleVersionId).HasColumnName("version_regla_id");
+            entity.Property(item => item.ScaleLevelId).HasColumnName("nivel_escala_id");
             entity.Property(item => item.RiskMin).HasColumnName("riesgo_min").HasPrecision(8, 3);
             entity.Property(item => item.MinimumIncluded).HasColumnName("riesgo_min_incluido");
             entity.Property(item => item.RiskMax).HasColumnName("riesgo_max").HasPrecision(8, 3);
@@ -317,7 +598,9 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
         {
             entity.ToTable("Calculo_Riesgo");
             entity.HasKey(item => item.Id);
+            entity.HasOne<RiskRuleVersion>().WithMany().HasForeignKey(item => item.RuleVersionId).OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(item => new { item.CompanyId, item.CalculatedAt });
+            entity.Property(item => item.RuleVersionId).HasColumnName("version_regla_id");
             entity.Property(item => item.CompanyId).HasColumnName("empresa_id");
             entity.Property(item => item.CalculatedAt).HasColumnName("fecha_calculo");
             entity.Property(item => item.ProductRisk).HasColumnName("riesgo_producto_rd").HasPrecision(8, 3);
