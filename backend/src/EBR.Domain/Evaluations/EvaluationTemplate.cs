@@ -11,7 +11,7 @@ public static class EvaluationItemTypes
 {
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
     {
-        "CHAPTER", "SECTION", "SUBSECTION", "QUESTION", "INSTRUCTION", "OPTION"
+        "CHAPTER", "SECTION", "SUBSECTION", "GROUP", "QUESTION", "INSTRUCTION", "OPTION"
     };
 }
 

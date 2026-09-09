@@ -93,6 +93,7 @@ if (authenticationConfigured)
     app.MapAdminEndpoints();
     app.MapUserEndpoints();
     app.MapCompanyEndpoints();
+    app.MapCatalogEndpoints();
     app.MapRiskCatalogEndpoints();
     app.MapRiskEndpoints();
     app.MapEvaluationTemplateEndpoints();

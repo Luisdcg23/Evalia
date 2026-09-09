@@ -4,6 +4,12 @@ public static class BpmRequestStatuses
 {
     public const string Draft = "DRAFT";
     public const string Submitted = "SUBMITTED";
+
+    public static IReadOnlyList<string> All { get; } =
+    [
+        Draft,
+        Submitted
+    ];
 }
 
 public sealed class BpmRequest

@@ -12,6 +12,20 @@ public static class CaseStatuses
     public const string Approved = "APPROVED";
     public const string Closed = "CLOSED";
     public const string Cancelled = "CANCELLED";
+
+    public static IReadOnlyList<string> All { get; } =
+    [
+        PendingAssignment,
+        Assigned,
+        Scheduled,
+        InEvaluation,
+        PendingReport,
+        InReview,
+        CorrectionRequired,
+        Approved,
+        Closed,
+        Cancelled
+    ];
 }
 
 public sealed class InspectionCase
