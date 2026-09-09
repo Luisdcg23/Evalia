@@ -106,7 +106,12 @@ public sealed class LoginEndpointTests : IClassFixture<EbrApiFactory>
             phoneNumber = "8095550101",
             email,
             password = "Registro2026!",
-            requestedRole = "USUARIO_DELEGADO"
+            requestedRole = "USUARIO_DELEGADO",
+            authorizationLetterFileName = "carta-autorizacion.pdf",
+            authorizationLetterMimeType = "application/pdf",
+            authorizationLetterSizeBytes = 102400,
+            authorizationLetterHash = "0000000000000000000000000000000000000000000000000000000000000001",
+            authorizationLetterStorageReference = "pendientes/carta-autorizacion.pdf"
         });
         using var prematureLogin = await _client.PostAsJsonAsync("/api/auth/login", new
         {
@@ -250,7 +255,12 @@ public sealed class LoginEndpointTests : IClassFixture<EbrApiFactory>
             phoneNumber = "8095550101",
             email,
             password,
-            requestedRole = "USUARIO_DELEGADO"
+            requestedRole = "USUARIO_DELEGADO",
+            authorizationLetterFileName = "carta-autorizacion.pdf",
+            authorizationLetterMimeType = "application/pdf",
+            authorizationLetterSizeBytes = 102400,
+            authorizationLetterHash = "0000000000000000000000000000000000000000000000000000000000000002",
+            authorizationLetterStorageReference = "pendientes/carta-autorizacion.pdf"
         });
         registrationResponse.EnsureSuccessStatusCode();
 

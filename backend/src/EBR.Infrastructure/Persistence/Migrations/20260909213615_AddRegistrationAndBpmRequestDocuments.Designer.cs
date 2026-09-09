@@ -3,6 +3,7 @@ using System;
 using EBR.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace EBR.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(EbrDbContext))]
-    partial class EbrDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260909213615_AddRegistrationAndBpmRequestDocuments")]
+    partial class AddRegistrationAndBpmRequestDocuments
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1554,47 +1557,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.ToTable("Caso", (string)null);
                 });
 
-            modelBuilder.Entity("EBR.Domain.Workflow.InstitutionalScheduling", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("CompanyId")
-                        .HasColumnType("integer")
-                        .HasColumnName("empresa_id");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_creacion");
-
-                    b.Property<Guid>("CreatedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("creado_por");
-
-                    b.Property<string>("Observations")
-                        .IsRequired()
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)")
-                        .HasColumnName("observaciones");
-
-                    b.Property<string>("Reason")
-                        .IsRequired()
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)")
-                        .HasColumnName("motivo");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CreatedBy");
-
-                    b.HasIndex("CompanyId", "CreatedAt");
-
-                    b.ToTable("Programacion_Institucional", (string)null);
-                });
-
             modelBuilder.Entity("EBR.Infrastructure.Identity.ApplicationUser", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2270,21 +2232,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("EBR.Domain.Workflow.InspectionCase", b =>
-                {
-                    b.HasOne("EBR.Domain.Companies.Company", null)
-                        .WithMany()
-                        .HasForeignKey("CompanyId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
-                        .WithMany()
-                        .HasForeignKey("CreatedBy")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Domain.Workflow.InstitutionalScheduling", b =>
                 {
                     b.HasOne("EBR.Domain.Companies.Company", null)
                         .WithMany()

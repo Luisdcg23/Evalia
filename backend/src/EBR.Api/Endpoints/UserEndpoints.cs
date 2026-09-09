@@ -15,6 +15,8 @@ public static class UserEndpoints
         group.MapGet("/me", GetCurrentAsync);
         group.MapGet("/pending", GetPendingAsync).RequireAuthorization(policy =>
             policy.RequireRole(SystemRoles.Administrator));
+        group.MapGet("/{id:guid}/registration-documents", GetRegistrationDocumentsAsync).RequireAuthorization(policy =>
+            policy.RequireRole(SystemRoles.Administrator));
         group.MapPost("/{id:guid}/approve", ApproveAsync).RequireAuthorization(policy =>
             policy.RequireRole(SystemRoles.Administrator));
         group.MapPost("/{id:guid}/reject", RejectAsync).RequireAuthorization(policy =>
@@ -58,22 +60,49 @@ public static class UserEndpoints
         });
     }
 
-    private static async Task<IResult> GetPendingAsync(UserManager<ApplicationUser> userManager)
+    private static async Task<IResult> GetPendingAsync(
+        UserManager<ApplicationUser> userManager,
+        EbrDbContext context,
+        CancellationToken cancellationToken)
     {
         var users = await userManager.Users
             .Where(user => user.ApprovalStatus == UserApprovalStatus.PendingValidation)
             .OrderBy(user => user.FullName)
-            .Select(user => new
-            {
-                user.Id,
-                Email = user.Email ?? string.Empty,
-                user.FullName,
-                user.DocumentNumber,
-                user.PhoneNumber,
-                user.RequestedRole
-            })
-            .ToListAsync();
-        return Results.Ok(users);
+            .ToListAsync(cancellationToken);
+        var userIds = users.Select(user => user.Id).ToList();
+        var documents = await context.UserRegistrationDocuments.AsNoTracking()
+            .Where(document => userIds.Contains(document.UserId))
+            .ToListAsync(cancellationToken);
+
+        return Results.Ok(users.Select(user => new
+        {
+            user.Id,
+            Email = user.Email ?? string.Empty,
+            user.FullName,
+            user.DocumentNumber,
+            user.PhoneNumber,
+            user.RequestedRole,
+            RegistrationDocuments = documents.Where(document => document.UserId == user.Id).ToList()
+        }));
+    }
+
+    private static async Task<IResult> GetRegistrationDocumentsAsync(
+        Guid id,
+        UserManager<ApplicationUser> userManager,
+        EbrDbContext context,
+        CancellationToken cancellationToken)
+    {
+        var user = await userManager.FindByIdAsync(id.ToString());
+        if (user is null)
+        {
+            return Results.NotFound();
+        }
+
+        var documents = await context.UserRegistrationDocuments.AsNoTracking()
+            .Where(document => document.UserId == id)
+            .OrderBy(document => document.UploadedAt)
+            .ToListAsync(cancellationToken);
+        return Results.Ok(documents);
     }
 
     private static async Task<IResult> ApproveAsync(

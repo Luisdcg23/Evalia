@@ -27,6 +27,29 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   y expedientes.
 - Perfil de usuario autenticado con las empresas realmente autorizadas para
   cada cuenta (`GET /api/users/me`, función `fn_perfil_usuario`).
+- Perfil completo de empresa (dirección, municipio, provincia, teléfono,
+  correo y actividad económica) con actualización mediante
+  `PUT /api/companies/{id}` protegida por control de concurrencia optimista
+  (token de versión) y con historial append-only de cambios
+  (`GET /api/companies/{id}/history`, disparador
+  `tr_empresa_historial_inmutable`).
+- Representantes de empresa tipados (legal, calidad, contacto principal), con
+  como máximo un representante activo por tipo y por empresa.
+- Metadatos de la carta de autorización como adjunto obligatorio del registro
+  de usuario (`POST /api/auth/register`), con catálogo cerrado de tipo de
+  documento y consulta para el administrador
+  (`GET /api/users/{id}/registration-documents`).
+- Metadatos de documentación obligatoria para solicitudes BPM
+  (`POST /api/bpm-requests/{id}/documents`, `GET /api/bpm-requests/{id}`), con
+  validación de presencia de al menos un documento antes de permitir el envío
+  de la solicitud. En ambos casos solo se guardan metadatos (nombre de
+  archivo, tipo MIME, tamaño, hash y referencia de almacenamiento); no se
+  persisten binarios.
+- Programación institucional de evaluaciones
+  (`POST /api/cases/institutional`, roles `ADMINISTRADOR` y `COORDINADOR`):
+  permite crear un expediente de inspección directamente, sin solicitud,
+  alerta ni denuncia previa, con motivo y observaciones obligatorios/
+  opcionales según el mismo patrón de los demás orígenes.
 
 ## [0.1.0] - 2026-09-08
 

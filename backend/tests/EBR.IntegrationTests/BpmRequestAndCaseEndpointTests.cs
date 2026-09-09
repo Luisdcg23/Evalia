@@ -23,6 +23,15 @@ public sealed class BpmRequestAndCaseEndpointTests : IClassFixture<EbrApiFactory
         }, token);
 
         Assert.Equal("DRAFT", draft.Status);
+        await PostJsonAsync<DocumentResponse>($"/api/bpm-requests/{draft.Id}/documents", new
+        {
+            documentType = "Documentación obligatoria",
+            fileName = "documentacion.pdf",
+            mimeType = "application/pdf",
+            sizeBytes = 2048,
+            hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            storageReference = "solicitudes/documentacion.pdf"
+        }, token);
         var firstCase = await PostJsonAsync<CaseResponse>($"/api/bpm-requests/{draft.Id}/submit", new { }, token);
         var repeatedCase = await PostJsonAsync<CaseResponse>($"/api/bpm-requests/{draft.Id}/submit", new { }, token);
         var cases = await GetJsonAsync<List<CaseResponse>>("/api/cases", await LoginAsync("coordinador@ebr.local"));
@@ -59,6 +68,15 @@ public sealed class BpmRequestAndCaseEndpointTests : IClassFixture<EbrApiFactory
         var draft = await PostJsonAsync<RequestResponse>("/api/bpm-requests", new
         {
             companyId = company.Id, establishmentType = "Fábrica", reason = "Control", observations = ""
+        }, companyToken);
+        await PostJsonAsync<DocumentResponse>($"/api/bpm-requests/{draft.Id}/documents", new
+        {
+            documentType = "Documentación obligatoria",
+            fileName = "documentacion.pdf",
+            mimeType = "application/pdf",
+            sizeBytes = 2048,
+            hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            storageReference = "solicitudes/documentacion.pdf"
         }, companyToken);
         var createdCase = await PostJsonAsync<CaseResponse>($"/api/bpm-requests/{draft.Id}/submit", new { }, companyToken);
 
@@ -105,4 +123,5 @@ public sealed class BpmRequestAndCaseEndpointTests : IClassFixture<EbrApiFactory
     private sealed record CompanyResponse(int Id);
     private sealed record RequestResponse(int Id, string Status);
     private sealed record CaseResponse(int Id, int SourceReferenceId, string Status);
+    private sealed record DocumentResponse(int Id, string DocumentType, string FileName);
 }

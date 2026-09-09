@@ -119,6 +119,113 @@ No se corrigen ni se completan; se conservan tal como aparecen en la fuente.
 - Las marcas de criticidad de la guía aparecen en la fila del criterio o en la inmediata siguiente,
   según cómo estén combinadas las celdas. La lectura respeta esa correspondencia posicional.
 
+## Empresas
+
+`Empresa` incorpora los campos del RF-03: `direccion`, `municipio`, `provincia`, `telefono`,
+`correo` y `actividad_economica` (texto, cadena vacía por defecto). El registro inicial
+(`POST /api/companies`) sigue exigiendo solo razón social, RNC y nombre comercial —igual que antes
+de esta ampliación—, porque el RNC es la identidad fiscal de la empresa y no se ofrece en el alta
+mínima ningún flujo para cambiarlo. El resto del perfil se completa con
+`PUT /api/companies/{id}`, que sí exige los ocho campos (razón social, nombre comercial, dirección,
+municipio, provincia, teléfono, correo con `@` y actividad económica); el RNC no se acepta en esa
+actualización y permanece inmutable tras el alta.
+
+`Empresa.version_token` es un token de concurrencia optimista (mismo patrón que
+`Solicitud_BPM.version_token`). `PUT /api/companies/{id}` exige el token vigente en el cuerpo de la
+solicitud: si no coincide con el valor actual de la fila, la actualización se rechaza con `409` sin
+modificar la empresa ni generar historial. Si coincide, la fila se actualiza y el token se
+regenera.
+
+Cada actualización exitosa que cambia al menos un campo agrega una fila a `Empresa_Historial`
+(`empresa_id`, `fecha_cambio`, `cambiado_por`, `cambios` en `jsonb` con el detalle `{campo: {old,
+new}}` de los campos que cambiaron). El historial es append-only: la invariante se refuerza en
+`EbrDbContext.SaveChanges` (rechaza `Modified`/`Deleted` sobre `CompanyHistoryEntry`) y se duplica
+en PostgreSQL con el disparador `tr_empresa_historial_inmutable`. `GET /api/companies/{id}/history`
+expone las filas ordenadas de la más reciente a la más antigua.
+
+`Representante_Empresa.tipo_representante` normaliza los tres tipos del RF-03 (`LEGAL`, `CALIDAD`,
+`CONTACTO_PRINCIPAL`), reforzados con `CK_Representante_Tipo`. La regla de negocio es que una
+empresa tiene como máximo un representante **activo** por tipo: se valida en el endpoint (`409` si
+ya existe uno activo del mismo tipo) y se duplica en la base con un índice único filtrado por
+vigencia, `IX_Representante_Empresa_empresa_id_tipo_representante_vigente`
+(`UNIQUE (empresa_id, tipo_representante) WHERE vigente`), que permite reactivar el tipo en el
+futuro sin que las filas inactivas históricas bloqueen la restricción.
+
+## Documentos de registro y solicitudes (solo metadatos)
+
+RF-02 exige la carta de autorización como adjunto obligatorio del registro de usuario y RF-05 exige
+documentación obligatoria para las solicitudes BPM. En ambos casos el sistema solo almacena
+**metadatos** del documento (nombre de archivo, tipo MIME, tamaño en bytes, hash y una referencia de
+almacenamiento en texto, por ejemplo una ruta o clave que en el futuro apuntará a MinIO). El binario
+nunca se persiste en PostgreSQL; el almacenamiento real de objetos queda como tarea futura separada
+("almacenamiento de evidencias"). Ninguna de las dos entidades tiene una propiedad de tipo binario.
+
+`Documento_Registro_Usuario` (`UserRegistrationDocument`) se liga al usuario por `usuario_id`.
+`tipo_documento` es un catálogo cerrado (`UserRegistrationDocumentTypes`), hoy con un único valor,
+`CARTA_AUTORIZACION`, reforzado con `CK_Documento_Registro_Tipo`; se modela como catálogo y no como
+texto libre porque el SRS solo define ese adjunto para RF-02, pero deja espacio para agregar otros
+tipos de documento de registro sin cambiar el esquema. **Decisión conservadora**: `POST
+/api/auth/register` exige los cinco metadatos de la carta de autorización (nombre de archivo, tipo
+MIME, tamaño, hash y referencia de almacenamiento) y rechaza el registro completo (`400`) si falta
+alguno; el SRS declara ese adjunto como requerido de RF-02, así que no se acepta un registro
+incompleto para completarlo después. El metadato se guarda en la misma transacción que crea el
+usuario. `GET /api/users/pending` y el nuevo `GET /api/users/{id}/registration-documents` (solo
+`ADMINISTRADOR`) exponen esos metadatos para que el administrador los vea al aprobar o rechazar la
+solicitud de registro.
+
+`Solicitud_BPM_Documento` (`BpmRequestDocument`) se liga a la solicitud por `solicitud_id` y admite
+más de un documento por solicitud. A diferencia del documento de registro, `tipo_documento` es texto
+controlado (`character varying(120)`, no vacío) y no un catálogo cerrado: el SRS describe la
+"documentación obligatoria" de RF-05 sin enumerar una lista cerrada de tipos de documento, así que no
+se inventa esa lista; el control de formato queda en la validación del endpoint
+(`POST /api/bpm-requests/{id}/documents`, mismos roles que pueden crear o editar la solicitud), no en
+una restricción de base de datos. `GET /api/bpm-requests/{id}` (nuevo) y `GET /api/bpm-requests`
+incluyen la lista de documentos de cada solicitud. Los documentos pueden agregarse sin importar el
+estado de la solicitud (`DRAFT` o `SUBMITTED`): adjuntar evidencia adicional después del envío no
+modifica los campos de la solicitud en sí, así que no se sujeta a la misma regla que bloquea la
+edición de una solicitud enviada.
+
+`POST /api/bpm-requests/{id}/submit` ahora exige al menos un documento adjunto: si la solicitud no
+tiene ninguna fila en `Solicitud_BPM_Documento`, el envío se rechaza con `409` sin cambiar el estado,
+antes de comprobar la transición de estado. El envío repetido de una solicitud ya enviada (con
+expediente ya creado) sigue siendo idempotente y no se ve afectado por esta validación, porque esa
+rama corta antes de llegar a la comprobación de documentos.
+
+## Casos y orígenes de evaluación (RF-06)
+
+`Caso` (`InspectionCase`) representa el expediente de inspección. Su origen se identifica con
+`tipo_origen`/`origen_id` (`SourceType`/`SourceReferenceId`), con un índice único
+`IX_Caso_tipo_origen_origen_id` que impide que el mismo origen genere más de un expediente. RF-06
+define cuatro orígenes posibles:
+
+| Origen (`tipo_origen`) | Cómo se genera | Endpoint |
+|---|---|---|
+| `BPM_REQUEST` | Solicitud de empresa enviada (RF-05) | `POST /api/bpm-requests/{id}/submit` |
+| `INSTITUTIONAL` | Programación institucional directa | `POST /api/cases/institutional` |
+| `ALERT` | Alerta LAPCH decidida como `PROCEED` | `POST /api/alerts/{id}/decision` |
+| `COMPLAINT` | Denuncia decidida como `PROCEED` | `POST /api/complaints/{id}/decision` |
+
+`Programacion_Institucional` (`InstitutionalScheduling`) es la tabla de origen del cuarto escenario:
+`ADMINISTRADOR` o `COORDINADOR` programan directamente una evaluación sin que exista una solicitud,
+alerta o denuncia previa. Guarda `empresa_id`, `motivo` (obligatorio) y `observaciones` (opcional),
+igual que el resto de los orígenes documentan su justificación. A diferencia de `Alerta_LAPCH` y
+`Denuncia`, no tiene un paso de decisión intermedio: `POST /api/cases/institutional` crea la fila de
+`Programacion_Institucional` y el `Caso` (`PENDING_ASSIGNMENT`) en la misma operación, porque la
+programación institucional no requiere evaluar si "procede" — la entidad que programa ya decidió que
+la inspección debe realizarse. El expediente resultante recorre el mismo `CaseStateMachine` que
+cualquier otro origen.
+
+**Cierre de alertas y denuncias que no proceden (verificado, sin cambios de comportamiento):**
+`Alerta_LAPCH.resultado` y `Denuncia.resultado` solo aceptan una decisión mientras están en
+`PENDING`; `DecideAlertAsync`/`DecideComplaintAsync` comprueban `item.Status != "PENDING"` antes de
+aplicar cualquier cambio, así que una alerta o denuncia ya decidida (`NOT_PROCEED`, `PROCEED` o, en
+denuncias, `REFERRED`) queda en un estado terminal: una segunda llamada a `/decision` no cambia el
+resultado, no reemplaza el motivo ni la fecha de decisión, y no puede generar un expediente adicional
+(reforzado además por el índice único de `Caso` sobre `tipo_origen`/`origen_id`). `NOT_PROCEED` y
+`REFERRED` son valores de resultado distintos y ambos son terminales; ninguno crea expediente. Esta
+sección documenta el comportamiento existente, confirmado con pruebas explícitas
+(`AlertAndComplaintEndpointTests`); no fue necesario corregir nada.
+
 ## Riesgo y frecuencia
 
 Se manejan escalas separadas y versionadas en `Escala_Riesgo` y `Escala_Riesgo_Nivel`:
@@ -303,6 +410,8 @@ Disparadores:
   `Plantilla_Evaluacion_Opcion`, `Plantilla_Evaluacion_Regla` y `Plantilla_Evaluacion_Criterio`
   impide alterar una versión publicada mediante la función `fn_plantilla_publicada_inmutable()`.
   Solo admite la transición de `DRAFT` a `PUBLISHED` en la cabecera.
+- `tr_empresa_historial_inmutable` sobre `Empresa_Historial` impide actualizar o eliminar una fila
+  de historial de empresa registrada, mediante la función `fn_empresa_historial_inmutable()`.
 
 Los nombres anteriores representan el contrato estable. Su creación se versiona dentro de una migración de EF Core.
 
@@ -310,10 +419,14 @@ Rutinas ya creadas por migraciones: `sp_registrar_calculo_riesgo`, `fn_calculo_r
 `tr_calculo_riesgo_inmutable`, incorporadas en `AddVersionedRiskRules`; `fn_plantilla_arbol`,
 `sp_importar_plantilla_bpm`, `sp_publicar_plantilla`, `fn_plantilla_publicada_inmutable` y
 `tr_plantilla_publicada_inmutable`, incorporadas en `AddBpmTemplateCatalogs`; `fn_perfil_usuario`,
-incorporada en `AddUserProfileFunction`. El resto sigue pendiente de las tareas correspondientes,
-incluida `fn_catalogo_opciones`: los catálogos generales descritos arriba se resuelven hoy con
-consultas EF equivalentes porque las pruebas de integración corren sobre el proveedor en memoria,
-que no ejecuta funciones de PostgreSQL.
+incorporada en `AddUserProfileFunction`; `fn_empresa_historial_inmutable` y
+`tr_empresa_historial_inmutable`, incorporadas en `AddCompanyProfileAndHistory`. Las tablas
+`Documento_Registro_Usuario` y `Solicitud_BPM_Documento` se incorporaron en
+`AddRegistrationAndBpmRequestDocuments`; no requirieron rutinas nuevas porque su validación de
+presencia se resuelve con una consulta simple en el endpoint. El resto sigue
+pendiente de las tareas correspondientes, incluida `fn_catalogo_opciones`: los catálogos generales
+descritos arriba se resuelven hoy con consultas EF equivalentes porque las pruebas de integración
+corren sobre el proveedor en memoria, que no ejecuta funciones de PostgreSQL.
 
 ## Instalación y actualización
 

@@ -3,6 +3,7 @@ using System;
 using EBR.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace EBR.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(EbrDbContext))]
-    partial class EbrDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260909211606_AddCompanyProfileAndHistory")]
+    partial class AddCompanyProfileAndHistory
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1263,63 +1266,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.ToTable("Solicitud_BPM", (string)null);
                 });
 
-            modelBuilder.Entity("EBR.Domain.Workflow.BpmRequestDocument", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("BpmRequestId")
-                        .HasColumnType("integer")
-                        .HasColumnName("solicitud_id");
-
-                    b.Property<string>("DocumentType")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)")
-                        .HasColumnName("tipo_documento");
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasMaxLength(260)
-                        .HasColumnType("character varying(260)")
-                        .HasColumnName("nombre_archivo");
-
-                    b.Property<string>("Hash")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("hash");
-
-                    b.Property<string>("MimeType")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)")
-                        .HasColumnName("tipo_mime");
-
-                    b.Property<long>("SizeBytes")
-                        .HasColumnType("bigint")
-                        .HasColumnName("tamano_bytes");
-
-                    b.Property<string>("StorageReference")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
-                        .HasColumnName("referencia_almacenamiento");
-
-                    b.Property<DateTimeOffset>("UploadedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_carga");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BpmRequestId", "UploadedAt");
-
-                    b.ToTable("Solicitud_BPM_Documento", (string)null);
-                });
-
             modelBuilder.Entity("EBR.Domain.Workflow.CaseStateHistory", b =>
                 {
                     b.Property<int>("Id")
@@ -1554,47 +1500,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.ToTable("Caso", (string)null);
                 });
 
-            modelBuilder.Entity("EBR.Domain.Workflow.InstitutionalScheduling", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("CompanyId")
-                        .HasColumnType("integer")
-                        .HasColumnName("empresa_id");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_creacion");
-
-                    b.Property<Guid>("CreatedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("creado_por");
-
-                    b.Property<string>("Observations")
-                        .IsRequired()
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)")
-                        .HasColumnName("observaciones");
-
-                    b.Property<string>("Reason")
-                        .IsRequired()
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)")
-                        .HasColumnName("motivo");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CreatedBy");
-
-                    b.HasIndex("CompanyId", "CreatedAt");
-
-                    b.ToTable("Programacion_Institucional", (string)null);
-                });
-
             modelBuilder.Entity("EBR.Infrastructure.Identity.ApplicationUser", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1739,66 +1644,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("RefreshToken", (string)null);
-                });
-
-            modelBuilder.Entity("EBR.Infrastructure.Identity.UserRegistrationDocument", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("DocumentType")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("character varying(30)")
-                        .HasColumnName("tipo_documento");
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasMaxLength(260)
-                        .HasColumnType("character varying(260)")
-                        .HasColumnName("nombre_archivo");
-
-                    b.Property<string>("Hash")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)")
-                        .HasColumnName("hash");
-
-                    b.Property<string>("MimeType")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)")
-                        .HasColumnName("tipo_mime");
-
-                    b.Property<long>("SizeBytes")
-                        .HasColumnType("bigint")
-                        .HasColumnName("tamano_bytes");
-
-                    b.Property<string>("StorageReference")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
-                        .HasColumnName("referencia_almacenamiento");
-
-                    b.Property<DateTimeOffset>("UploadedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_carga");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("usuario_id");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId", "DocumentType");
-
-                    b.ToTable("Documento_Registro_Usuario", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_Documento_Registro_Tipo", "tipo_documento IN ('CARTA_AUTORIZACION')");
-                        });
                 });
 
             modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole<System.Guid>", b =>
@@ -2216,15 +2061,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("EBR.Domain.Workflow.BpmRequestDocument", b =>
-                {
-                    b.HasOne("EBR.Domain.Workflow.BpmRequest", null)
-                        .WithMany()
-                        .HasForeignKey("BpmRequestId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
             modelBuilder.Entity("EBR.Domain.Workflow.CaseStateHistory", b =>
                 {
                     b.HasOne("EBR.Domain.Workflow.InspectionCase", null)
@@ -2280,30 +2116,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
                         .WithMany()
                         .HasForeignKey("CreatedBy")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Domain.Workflow.InstitutionalScheduling", b =>
-                {
-                    b.HasOne("EBR.Domain.Companies.Company", null)
-                        .WithMany()
-                        .HasForeignKey("CompanyId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
-                        .WithMany()
-                        .HasForeignKey("CreatedBy")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Infrastructure.Identity.UserRegistrationDocument", b =>
-                {
-                    b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
-                        .WithMany()
-                        .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
