@@ -3,6 +3,7 @@ using System;
 using EBR.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace EBR.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(EbrDbContext))]
-    partial class EbrDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260909144331_AddVersionedRiskRules")]
+    partial class AddVersionedRiskRules
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -125,300 +128,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.ToTable("Empresa_Usuario", (string)null);
                 });
 
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationGuidanceCriterion", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Code")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
-                        .HasColumnName("codigo");
-
-                    b.Property<string>("Criticality")
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
-                        .HasColumnName("criticidad");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("descripcion");
-
-                    b.Property<int>("ItemId")
-                        .HasColumnType("integer")
-                        .HasColumnName("item_id");
-
-                    b.Property<int>("Order")
-                        .HasColumnType("integer")
-                        .HasColumnName("orden");
-
-                    b.Property<string>("SourceCell")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
-                        .HasColumnName("celda_origen");
-
-                    b.Property<string>("SourceSheet")
-                        .IsRequired()
-                        .HasMaxLength(60)
-                        .HasColumnType("character varying(60)")
-                        .HasColumnName("hoja_origen");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ItemId", "Code")
-                        .IsUnique();
-
-                    b.ToTable("Plantilla_Evaluacion_Criterio", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_Criterio_Criticidad", "criticidad IS NULL OR criticidad IN ('CRITICAL','MAJOR','MINOR')");
-                        });
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationImportBatch", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("ContentHash")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("hash_contenido");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_creacion");
-
-                    b.Property<Guid?>("CreatedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("creado_por");
-
-                    b.Property<string>("ErrorDetail")
-                        .HasColumnType("text")
-                        .HasColumnName("detalle_error");
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasMaxLength(260)
-                        .HasColumnType("character varying(260)")
-                        .HasColumnName("archivo");
-
-                    b.Property<string>("SheetName")
-                        .IsRequired()
-                        .HasMaxLength(60)
-                        .HasColumnType("character varying(60)")
-                        .HasColumnName("hoja");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(15)
-                        .HasColumnType("character varying(15)")
-                        .HasColumnName("estado");
-
-                    b.Property<int?>("TemplateId")
-                        .HasColumnType("integer")
-                        .HasColumnName("plantilla_id");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TemplateId");
-
-                    b.HasIndex("FileName", "SheetName", "ContentHash")
-                        .IsUnique();
-
-                    b.ToTable("Plantilla_Importacion_Lote", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_Lote_Estado", "estado IN ('PENDIENTE','PROMOVIDO','RECHAZADO')");
-                        });
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationImportRow", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("BatchId")
-                        .HasColumnType("integer")
-                        .HasColumnName("lote_id");
-
-                    b.Property<string>("Code")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)")
-                        .HasColumnName("codigo");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("descripcion");
-
-                    b.Property<string>("ErrorDetail")
-                        .HasColumnType("text")
-                        .HasColumnName("detalle_error");
-
-                    b.Property<string>("ItemType")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasColumnName("tipo_item");
-
-                    b.Property<int>("Order")
-                        .HasColumnType("integer")
-                        .HasColumnName("orden");
-
-                    b.Property<string>("ParentCode")
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)")
-                        .HasColumnName("codigo_padre");
-
-                    b.Property<string>("SourceCell")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
-                        .HasColumnName("celda_origen");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(15)
-                        .HasColumnType("character varying(15)")
-                        .HasColumnName("estado");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BatchId", "Code")
-                        .IsUnique();
-
-                    b.ToTable("Plantilla_Importacion_Fila", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_Fila_Estado", "estado IN ('PENDIENTE','PROMOVIDO','RECHAZADO')");
-                        });
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationQualificationRule", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Action")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("accion");
-
-                    b.Property<string>("Classification")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("clasificacion");
-
-                    b.Property<string>("Code")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)")
-                        .HasColumnName("codigo");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("descripcion");
-
-                    b.Property<bool>("MaxIncluded")
-                        .HasColumnType("boolean")
-                        .HasColumnName("maximo_incluido");
-
-                    b.Property<decimal?>("MaxPercentage")
-                        .HasPrecision(5, 2)
-                        .HasColumnType("numeric(5,2)")
-                        .HasColumnName("porcentaje_max");
-
-                    b.Property<bool>("MinIncluded")
-                        .HasColumnType("boolean")
-                        .HasColumnName("minimo_incluido");
-
-                    b.Property<decimal?>("MinPercentage")
-                        .HasPrecision(5, 2)
-                        .HasColumnType("numeric(5,2)")
-                        .HasColumnName("porcentaje_min");
-
-                    b.Property<int>("Order")
-                        .HasColumnType("integer")
-                        .HasColumnName("orden");
-
-                    b.Property<int>("TemplateId")
-                        .HasColumnType("integer")
-                        .HasColumnName("plantilla_id");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TemplateId", "Code")
-                        .IsUnique();
-
-                    b.ToTable("Plantilla_Evaluacion_Regla", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_Regla_Calificacion", "porcentaje_min IS NOT NULL OR porcentaje_max IS NOT NULL");
-                        });
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationResponseOption", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Code")
-                        .IsRequired()
-                        .HasMaxLength(5)
-                        .HasColumnType("character varying(5)")
-                        .HasColumnName("codigo");
-
-                    b.Property<bool>("CountsTowardDenominator")
-                        .HasColumnType("boolean")
-                        .HasColumnName("cuenta_denominador");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("nombre");
-
-                    b.Property<int>("Order")
-                        .HasColumnType("integer")
-                        .HasColumnName("orden");
-
-                    b.Property<int>("TemplateId")
-                        .HasColumnType("integer")
-                        .HasColumnName("plantilla_id");
-
-                    b.Property<decimal?>("Value")
-                        .HasPrecision(4, 2)
-                        .HasColumnType("numeric(4,2)")
-                        .HasColumnName("valor");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TemplateId", "Code")
-                        .IsUnique();
-
-                    b.ToTable("Plantilla_Evaluacion_Opcion", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_Opcion_Evaluable", "(valor IS NULL AND NOT cuenta_denominador) OR (valor IS NOT NULL AND cuenta_denominador AND valor BETWEEN 0 AND 1)");
-                        });
-                });
-
             modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationTemplate", b =>
                 {
                     b.Property<int>("Id")
@@ -483,7 +192,8 @@ namespace EBR.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("Description")
                         .IsRequired()
-                        .HasColumnType("text")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
                         .HasColumnName("descripcion");
 
                     b.Property<bool>("IsActive")
@@ -1704,50 +1414,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
                         .WithMany()
                         .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationGuidanceCriterion", b =>
-                {
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationTemplateItem", null)
-                        .WithMany()
-                        .HasForeignKey("ItemId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationImportBatch", b =>
-                {
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationTemplate", null)
-                        .WithMany()
-                        .HasForeignKey("TemplateId")
-                        .OnDelete(DeleteBehavior.Restrict);
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationImportRow", b =>
-                {
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationImportBatch", null)
-                        .WithMany()
-                        .HasForeignKey("BatchId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationQualificationRule", b =>
-                {
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationTemplate", null)
-                        .WithMany()
-                        .HasForeignKey("TemplateId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationResponseOption", b =>
-                {
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationTemplate", null)
-                        .WithMany()
-                        .HasForeignKey("TemplateId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

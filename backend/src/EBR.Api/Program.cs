@@ -8,9 +8,15 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Logging;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+
+if (builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Logging.ClearProviders();
+}
 
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
@@ -87,6 +93,7 @@ if (authenticationConfigured)
     app.MapAdminEndpoints();
     app.MapUserEndpoints();
     app.MapCompanyEndpoints();
+    app.MapCatalogEndpoints();
     app.MapRiskCatalogEndpoints();
     app.MapRiskEndpoints();
     app.MapEvaluationTemplateEndpoints();

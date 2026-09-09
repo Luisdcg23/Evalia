@@ -4,12 +4,12 @@ using Microsoft.Extensions.Configuration;
 
 namespace EBR.IntegrationTests;
 
-public sealed class HealthEndpointTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class HealthEndpointTests : IClassFixture<EbrApiFactory>
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly EbrApiFactory _factory;
     private readonly HttpClient _client;
 
-    public HealthEndpointTests(WebApplicationFactory<Program> factory)
+    public HealthEndpointTests(EbrApiFactory factory)
     {
         _factory = factory;
         _client = factory.CreateClient(new WebApplicationFactoryClientOptions
