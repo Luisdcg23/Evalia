@@ -1,4 +1,46 @@
 import { useState, useEffect } from "react";
+import { listAlerts, type HealthAlert } from "./features/alerts/api";
+import { listComplaints, type Complaint } from "./features/complaints/api";
+import { listCompanies, type Company } from "./features/companies/api";
+
+/* ── Backend → UI mappers (Alertas / Denuncias) ───────────────────────
+   El backend guarda el resultado de la decisión y el estado de trámite
+   en un solo campo `status` ("PENDING" | "PROCEED" | "NOT_PROCEED" |
+   "REFERRED"). La UI separa eso en `resultado` (chip de decisión) y
+   `estado` (Activa mientras no se ha decidido, Cerrada una vez decidida). */
+function formatFecha(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleDateString("es-DO", { day: "2-digit", month: "short", year: "numeric" });
+}
+function mapResultado(status: string): AlertResult {
+  if (status === "PROCEED") return "Procede";
+  if (status === "NOT_PROCEED") return "No Procede";
+  return "En Revisión"; // PENDING, REFERRED, o cualquier otro estado intermedio
+}
+function toAlertaItem(alert: HealthAlert, companies: Company[]): AlertaItem {
+  return {
+    id: alert.id,
+    numero: alert.alertNumber,
+    fecha: formatFecha(alert.receivedAt),
+    producto: alert.product,
+    empresa: companies.find(c => c.id === alert.companyId)?.tradeName ?? `Empresa #${alert.companyId}`,
+    desc: alert.description,
+    resultado: mapResultado(alert.status),
+    estado: alert.status === "PENDING" ? "Activa" : "Cerrada",
+  };
+}
+function toDenunciaItem(complaint: Complaint): DenunciaItem {
+  return {
+    id: complaint.id,
+    codigo: `DEN-${complaint.id}`,
+    tipo: complaint.complaintType,
+    fechaRec: formatFecha(complaint.receivedAt),
+    desc: complaint.description,
+    resultado: mapResultado(complaint.status),
+    estado: complaint.status === "PENDING" ? "Activa" : "Cerrada",
+  };
+}
 
 function useWidth() {
   const [w, setW] = useState(() => window.innerWidth);
@@ -80,16 +122,11 @@ const EVALUACIONES_DATA: { id:string; empresa:string; tipo:string; tecnico:strin
   { id:"EBR-2026-0083", empresa:"Laboratorio Santos Cruz",      tipo:"Evaluación General",  tecnico:"Ing. M. Santos",    estado:"En Revisión",riesgo:"Crítico",  fecha:"22 ago 2026",    priority:"Alta"  },
   { id:"EBR-2026-0081", empresa:"Distribuidora Norte S.A.",     tipo:"Inspección Eléctrica",tecnico:null,                estado:"Pendiente",  riesgo:null,       fecha:"Pendiente asign.",priority:"Media" },
 ];
-const ALERTAS_DATA = [
-  { id:"ALP-2026-042", numero:"2026-042", fecha:"01 sep 2026", producto:"Jarabe Pectoral XR",   empresa:"Farmacéutica del Sur",   desc:"Contaminación microbiológica detectada en lote #LP-4421",        resultado:"Procede"     as AlertResult, estado:"Activa"  },
-  { id:"ALP-2026-038", numero:"2026-038", fecha:"25 ago 2026", producto:"Crema Hidratante Plus", empresa:"Cosmética Bella Dom.",    desc:"Ingrediente no declarado en etiqueta – Reporte FDA internacional",resultado:"En Revisión" as AlertResult, estado:"Activa"  },
-  { id:"ALP-2026-031", numero:"2026-031", fecha:"10 ago 2026", producto:"Suplemento VitaMax",    empresa:"Laboratorio Santos Cruz", desc:"Concentración fuera de especificación en muestreo rutinario",    resultado:"No Procede"  as AlertResult, estado:"Cerrada" },
-];
-const DENUNCIAS_DATA = [
-  { id:"DEN-2026-015", tipo:"Venta sin Registro",      fechaRec:"31 ago 2026", desc:"Venta de productos sin registro sanitario vigente en zona norte.",              resultado:"Procede"     as AlertResult, estado:"Activa"  },
-  { id:"DEN-2026-012", tipo:"Condiciones Higiénicas",  fechaRec:"22 ago 2026", desc:"Deficiencias graves en área de producción reportadas por trabajador interno.", resultado:"En Revisión" as AlertResult, estado:"Activa"  },
-  { id:"DEN-2026-009", tipo:"Etiquetado Incorrecto",   fechaRec:"05 ago 2026", desc:"Producto sin información de ingredientes ni fecha de vencimiento visible.",     resultado:"No Procede"  as AlertResult, estado:"Cerrada" },
-];
+/* Alertas y Denuncias ya no son datos simulados: se cargan desde
+   /api/alerts y /api/complaints (ver features/alerts, features/complaints)
+   y se transforman a esta forma con toAlertaItem/toDenunciaItem. */
+interface AlertaItem { id:number; numero:string; fecha:string; producto:string; empresa:string; desc:string; resultado:AlertResult; estado:"Activa"|"Cerrada" }
+interface DenunciaItem { id:number; codigo:string; tipo:string; fechaRec:string; desc:string; resultado:AlertResult; estado:"Activa"|"Cerrada" }
 const REPORTES_DATA = [
   { id:"INF-2026-083", empresa:"Laboratorio Santos Cruz",    tipo:"Evaluación General",  tecnico:"Ing. M. Santos",    estado:"En Revisión", fecha:"22 ago 2026", riesgo:"Crítico"  as RiskLevel },
   { id:"INF-2026-087", empresa:"Alimentos del Caribe SRL",  tipo:"Auditoría Calidad",   tecnico:"Ing. R. Méndez",   estado:"Aprobado",    fecha:"28 ago 2026", riesgo:"Alto"     as RiskLevel },
@@ -349,11 +386,11 @@ function CalendarioSection() {
 /* ─────────────────────────────────────────────────────────────────────
    Section: Alertas
 ───────────────────────────────────────────────────────────────────── */
-function AlertasSection({ onToast }:{ onToast:(m:string)=>void }) {
+function AlertasSection({ alertas, onToast }:{ alertas:AlertaItem[]; onToast:(m:string)=>void }) {
   const [showForm, setShowForm] = useState(false);
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-      <SectionHeader title="Alertas LAPCH" subtitle={`${ALERTAS_DATA.filter(a=>a.estado==="Activa").length} alertas activas`}
+      <SectionHeader title="Alertas LAPCH" subtitle={`${alertas.filter(a=>a.estado==="Activa").length} alertas activas`}
         action={<button onClick={()=>setShowForm(s=>!s)} style={{ padding:"8px 16px", borderRadius:11, fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif", cursor:"pointer", background:"rgba(229,59,246,0.12)", borderTop:"1px solid rgba(229,59,246,0.4)", borderRight:"1px solid rgba(229,59,246,0.4)", borderBottom:"1px solid rgba(229,59,246,0.4)", borderLeft:"1px solid rgba(229,59,246,0.4)", color:"#E53BF6" }}>+ Registrar alerta</button>}/>
       {showForm && <GlassCard accent="#E53BF6"><div style={{ padding:"18px 20px", display:"flex", flexDirection:"column", gap:12 }}>
         <p style={{ fontSize:"0.65rem", fontWeight:700, color:"#E53BF6", fontFamily:"Poppins, sans-serif", textTransform:"uppercase", letterSpacing:"0.1em" }}>Nueva Alerta LAPCH</p>
@@ -363,7 +400,7 @@ function AlertasSection({ onToast }:{ onToast:(m:string)=>void }) {
           <button onClick={()=>setShowForm(false)} style={{ padding:"9px 16px", borderRadius:10, cursor:"pointer", background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.4)", fontSize:"0.72rem", fontFamily:"Poppins, sans-serif" }}>Cancelar</button>
         </div>
       </div></GlassCard>}
-      {ALERTAS_DATA.map(al=>{
+      {alertas.map(al=>{
         const r=ALERT_RESULT[al.resultado];
         return <GlassCard key={al.id} accent={r.color}>
           <div style={{ padding:"16px 18px", display:"flex", flexDirection:"column", gap:10 }}>
@@ -389,22 +426,22 @@ function AlertasSection({ onToast }:{ onToast:(m:string)=>void }) {
 /* ─────────────────────────────────────────────────────────────────────
    Section: Denuncias
 ───────────────────────────────────────────────────────────────────── */
-function DenunciasSection({ onToast }:{ onToast:(m:string)=>void }) {
+function DenunciasSection({ denuncias, onToast }:{ denuncias:DenunciaItem[]; onToast:(m:string)=>void }) {
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-      <SectionHeader title="Denuncias" subtitle={`${DENUNCIAS_DATA.filter(d=>d.estado==="Activa").length} activas`}
+      <SectionHeader title="Denuncias" subtitle={`${denuncias.filter(d=>d.estado==="Activa").length} activas`}
         action={<button onClick={()=>onToast("Formulario de denuncia abierto")} style={{ padding:"8px 16px", borderRadius:11, fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif", cursor:"pointer", background:"rgba(246,229,59,0.1)", borderTop:"1px solid rgba(246,229,59,0.38)", borderRight:"1px solid rgba(246,229,59,0.38)", borderBottom:"1px solid rgba(246,229,59,0.38)", borderLeft:"1px solid rgba(246,229,59,0.38)", color:"#F6E53B" }}>+ Registrar denuncia</button>}/>
-      {DENUNCIAS_DATA.map(d=>{
+      {denuncias.map(d=>{
         const r=ALERT_RESULT[d.resultado];
         return <GlassCard key={d.id} accent={r.color}><div style={{ padding:"16px 18px", display:"flex", flexDirection:"column", gap:10 }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-            <div><span style={{ fontSize:"0.52rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.25)" }}>{d.id}</span><p style={{ fontSize:"0.88rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{d.tipo}</p><p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>Recibida: {d.fechaRec}</p></div>
+            <div><span style={{ fontSize:"0.52rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.25)" }}>{d.codigo}</span><p style={{ fontSize:"0.88rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{d.tipo}</p><p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>Recibida: {d.fechaRec}</p></div>
             <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:5 }}><Chip label={d.resultado} color={r.color} bg={r.bg} border={r.border}/><span style={{ fontSize:"0.55rem", color:d.estado==="Activa"?"#22c55e":"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif", fontWeight:600 }}>{d.estado}</span></div>
           </div>
           <p style={{ fontSize:"0.7rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif", lineHeight:1.5 }}>{d.desc}</p>
           <div style={{ display:"flex", justifyContent:"flex-end", gap:7 }}>
-            {d.resultado!=="No Procede" && <button onClick={()=>onToast("Evaluación generada · "+d.id)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(229,59,246,0.1)", borderTop:"1px solid rgba(229,59,246,0.35)", borderRight:"1px solid rgba(229,59,246,0.35)", borderBottom:"1px solid rgba(229,59,246,0.35)", borderLeft:"1px solid rgba(229,59,246,0.35)", color:"#E53BF6", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Generar evaluación</button>}
-            <button onClick={()=>onToast("Denuncia remitida · "+d.id)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.4)", fontSize:"0.62rem", fontFamily:"Poppins, sans-serif" }}>Remitir</button>
+            {d.resultado!=="No Procede" && <button onClick={()=>onToast("Evaluación generada · "+d.codigo)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(229,59,246,0.1)", borderTop:"1px solid rgba(229,59,246,0.35)", borderRight:"1px solid rgba(229,59,246,0.35)", borderBottom:"1px solid rgba(229,59,246,0.35)", borderLeft:"1px solid rgba(229,59,246,0.35)", color:"#E53BF6", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Generar evaluación</button>}
+            <button onClick={()=>onToast("Denuncia remitida · "+d.codigo)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.4)", fontSize:"0.62rem", fontFamily:"Poppins, sans-serif" }}>Remitir</button>
           </div>
         </div></GlassCard>;
       })}
@@ -786,11 +823,12 @@ function ConfiguracionSection({ userName, onToast }:{ userName:string; onToast:(
    Main Component
 ══════════════════════════════════════════════════════════════════════ */
 export default function CoordinatorDashboard({
-  onBack, userName = "María García",
+  onBack, userName = "María García", accessToken,
 }: {
   onBack?: () => void;
   userName?: string;
   onCompanyProfile?: () => void;
+  accessToken: string;
 }) {
   const width    = useWidth();
   const isMobile = width < 768;
@@ -803,8 +841,19 @@ export default function CoordinatorDashboard({
   const [confirmedTech, setConfirmedTech]= useState<Tecnico|null>(null);
   const [drawerOpen,    setDrawer]       = useState(false);
   const [toast,         setToast]        = useState<string|null>(null);
+  const [alertas,       setAlertas]      = useState<AlertaItem[]>([]);
+  const [denuncias,     setDenuncias]    = useState<DenunciaItem[]>([]);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(()=>setToast(null), 2800); };
+
+  useEffect(() => {
+    void Promise.all([listAlerts(accessToken), listComplaints(accessToken), listCompanies(accessToken)])
+      .then(([alertsData, complaintsData, companies]) => {
+        setAlertas(alertsData.map(a => toAlertaItem(a, companies)));
+        setDenuncias(complaintsData.map(toDenunciaItem));
+      })
+      .catch(error => showToast(error instanceof Error ? error.message : "No fue posible cargar alertas y denuncias."));
+  }, [accessToken]);
 
   const navigate = (s: Section) => { setSection(s); if(isMobile) setDrawer(false); };
 
@@ -921,8 +970,8 @@ export default function CoordinatorDashboard({
             {section==="inicio"        && <InicioSection onNavigate={navigate} casos={casos}/>}
             {section==="evaluaciones"  && <EvaluacionesSection/>}
             {section==="calendario"    && <CalendarioSection/>}
-            {section==="alertas"       && <AlertasSection onToast={showToast}/>}
-            {section==="denuncias"     && <DenunciasSection onToast={showToast}/>}
+            {section==="alertas"       && <AlertasSection alertas={alertas} onToast={showToast}/>}
+            {section==="denuncias"     && <DenunciasSection denuncias={denuncias} onToast={showToast}/>}
             {section==="asignaciones"  && <AsignacionesSection casos={casos} onOpenCaso={openCaso}/>}
             {section==="asignar-caso"  && selectedCaso && <AsignarCasoSection caso={selectedCaso} onConfirm={handleConfirmAssignment} onBack={()=>navigate("asignaciones")}/>}
             {section==="confirmacion"  && selectedCaso && confirmedTech && <ConfirmacionSection caso={selectedCaso} tecnico={confirmedTech} onGoAsignaciones={()=>navigate("asignaciones")} onGoInicio={()=>navigate("inicio")}/>}
