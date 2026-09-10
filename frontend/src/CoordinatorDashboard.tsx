@@ -2,6 +2,10 @@ import { useState, useEffect } from "react";
 import { listAlerts, type HealthAlert } from "./features/alerts/api";
 import { listComplaints, type Complaint } from "./features/complaints/api";
 import { listCompanies, type Company } from "./features/companies/api";
+import { listCases, listSchedule, type ScheduleEntry } from "./features/cases/api";
+import { getDashboard, listTechnicians, type DashboardMetrics } from "./features/operations/api";
+import NotificationsBell from "./features/notifications/NotificationsBell";
+import CaseHistoryPanel from "./features/history/CaseHistoryPanel";
 
 /* ── Backend → UI mappers (Alertas / Denuncias) ───────────────────────
    El backend guarda el resultado de la decisión y el estado de trámite
@@ -53,7 +57,7 @@ function useWidth() {
 }
 
 /* ── Types ──────────────────────────────────────────────────────────── */
-type Section    = "inicio" | "evaluaciones" | "calendario" | "alertas" | "denuncias" | "asignaciones" | "asignar-caso" | "confirmacion" | "reportes" | "configuracion";
+type Section    = "inicio" | "evaluaciones" | "calendario" | "alertas" | "denuncias" | "asignaciones" | "asignar-caso" | "confirmacion" | "reportes" | "historico" | "configuracion";
 type Priority   = "Alta" | "Media" | "Baja";
 type EvalStatus = "En Curso" | "Programada" | "Completada" | "Pendiente" | "En Revisión";
 type AlertResult= "Procede" | "En Revisión" | "No Procede";
@@ -63,7 +67,7 @@ type TechStatus = "Disponible" | "En Campo" | "Descanso";
 interface Caso {
   id: string; empresa: string; tipo: string; zona: string;
   fecha: string; priority: Priority; asignado: string | null;
-  solicitudId?: string;
+  estado: EvalStatus; rawId: number; solicitudId?: string;
 }
 interface Tecnico {
   id: string; name: string; initials: string; status: TechStatus;
@@ -95,56 +99,32 @@ const ALERT_RESULT: Record<AlertResult, { color:string; bg:string; border:string
   "No Procede":  { color:"#22c55e", bg:"rgba(34,197,94,0.1)",    border:"rgba(34,197,94,0.3)"    },
 };
 
-/* ── Sample data ────────────────────────────────────────────────────── */
-const CASOS_INIT: Caso[] = [
-  { id:"ASG-001", empresa:"Constructora García & Asoc.",  tipo:"Inspección General",      zona:"Santo Domingo",  fecha:"Hoy",    priority:"Alta",  asignado:null,        solicitudId:"SOL-2026-0039" },
-  { id:"ASG-002", empresa:"Farmacia San Martín",          tipo:"Registro Sanitario",      zona:"Santiago",       fecha:"Hoy",    priority:"Alta",  asignado:null         },
-  { id:"ASG-003", empresa:"Industrias Montoya S.A.",      tipo:"Auditoría LAPCH",         zona:"La Vega",        fecha:"Mañana", priority:"Alta",  asignado:null         },
-  { id:"ASG-004", empresa:"Distribuidora Norte",          tipo:"Evaluación Eléctrica",    zona:"Puerto Plata",   fecha:"03 sep", priority:"Media", asignado:null         },
-  { id:"ASG-005", empresa:"Ferrería del Sur",             tipo:"Inspección de Seguridad", zona:"San Cristóbal",  fecha:"03 sep", priority:"Alta",  asignado:null         },
-  { id:"ASG-006", empresa:"Comercial Ángel Ltda.",        tipo:"Inspección General",      zona:"Santo Domingo",  fecha:"04 sep", priority:"Media", asignado:null         },
-  { id:"ASG-007", empresa:"Torres Hermanos S.A.",         tipo:"Revisión Normativa ISO",  zona:"Santiago",       fecha:"04 sep", priority:"Baja",  asignado:"Ing. M. Santos" },
-  { id:"ASG-008", empresa:"Agro del Cibao C. por A.",    tipo:"Inspección Ambiental",    zona:"Moca",           fecha:"05 sep", priority:"Media", asignado:null         },
-];
-const TECHNICIANS: Tecnico[] = [
-  { id:"T1", name:"Ing. M. Santos",    initials:"MS", status:"Disponible", specialty:"Inspección General",  cases:4, maxCases:8, zona:"Distrito Nacional / Santiago" },
-  { id:"T2", name:"Lic. A. Fernández", initials:"AF", status:"Disponible", specialty:"Especialista LAPCH",  cases:2, maxCases:8, zona:"Santiago / La Vega" },
-  { id:"T3", name:"Ing. R. Méndez",   initials:"RM", status:"En Campo",   specialty:"Técnico Evaluador",   cases:6, maxCases:8, zona:"Santo Domingo" },
-  { id:"T4", name:"Lic. C. Vargas",   initials:"CV", status:"Disponible", specialty:"Inspector Senior",    cases:3, maxCases:8, zona:"Sur / San Cristóbal" },
-  { id:"T5", name:"Ing. P. Castillo", initials:"PC", status:"En Campo",   specialty:"Técnico Evaluador",   cases:5, maxCases:8, zona:"Norte / Puerto Plata" },
-  { id:"T6", name:"Dra. L. Reyes",    initials:"LR", status:"Descanso",   specialty:"Calidad y Normas",    cases:0, maxCases:8, zona:"Distrito Nacional" },
-];
-const EVALUACIONES_DATA: { id:string; empresa:string; tipo:string; tecnico:string|null; estado:EvalStatus; riesgo:RiskLevel|null; fecha:string; priority:Priority }[] = [
-  { id:"EBR-2026-0089", empresa:"Farmacéutica del Sur S.A.",    tipo:"Inspección BPM",      tecnico:"Ing. M. Santos",    estado:"En Curso",   riesgo:"Moderado", fecha:"Hoy 09:00",      priority:"Alta"  },
-  { id:"EBR-2026-0088", empresa:"Constructora García & Asoc.",  tipo:"Evaluación General",  tecnico:"Lic. A. Fernández", estado:"Programada", riesgo:null,       fecha:"Mañana 10:30",   priority:"Media" },
-  { id:"EBR-2026-0087", empresa:"Alimentos del Caribe SRL",     tipo:"Auditoría Calidad",   tecnico:"Ing. R. Méndez",   estado:"Completada", riesgo:"Alto",     fecha:"28 ago 2026",    priority:"Alta"  },
-  { id:"EBR-2026-0085", empresa:"Cosmética Bella Dominicana",   tipo:"Inspección BPM",      tecnico:"Lic. C. Vargas",   estado:"Completada", riesgo:"Bajo",     fecha:"25 ago 2026",    priority:"Baja"  },
-  { id:"EBR-2026-0083", empresa:"Laboratorio Santos Cruz",      tipo:"Evaluación General",  tecnico:"Ing. M. Santos",    estado:"En Revisión",riesgo:"Crítico",  fecha:"22 ago 2026",    priority:"Alta"  },
-  { id:"EBR-2026-0081", empresa:"Distribuidora Norte S.A.",     tipo:"Inspección Eléctrica",tecnico:null,                estado:"Pendiente",  riesgo:null,       fecha:"Pendiente asign.",priority:"Media" },
-];
-/* Alertas y Denuncias ya no son datos simulados: se cargan desde
-   /api/alerts y /api/complaints (ver features/alerts, features/complaints)
-   y se transforman a esta forma con toAlertaItem/toDenunciaItem. */
+/* ── Estado inicial ─────────────────────────────────────────────────── */
+const CASOS_INIT: Caso[] = [];
+/* Alertas y Denuncias no son datos simulados: se cargan desde /api/alerts y
+   /api/complaints. Casos, técnicos, agenda y métricas se cargan desde
+   /api/cases, /api/technicians, /api/cases/schedule y /api/dashboard. */
 interface AlertaItem { id:number; numero:string; fecha:string; producto:string; empresa:string; desc:string; resultado:AlertResult; estado:"Activa"|"Cerrada" }
 interface DenunciaItem { id:number; codigo:string; tipo:string; fechaRec:string; desc:string; resultado:AlertResult; estado:"Activa"|"Cerrada" }
-const REPORTES_DATA = [
-  { id:"INF-2026-083", empresa:"Laboratorio Santos Cruz",    tipo:"Evaluación General",  tecnico:"Ing. M. Santos",    estado:"En Revisión", fecha:"22 ago 2026", riesgo:"Crítico"  as RiskLevel },
-  { id:"INF-2026-087", empresa:"Alimentos del Caribe SRL",  tipo:"Auditoría Calidad",   tecnico:"Ing. R. Méndez",   estado:"Aprobado",    fecha:"28 ago 2026", riesgo:"Alto"     as RiskLevel },
-  { id:"INF-2026-085", empresa:"Cosmética Bella Dominicana",tipo:"Inspección BPM",      tecnico:"Lic. C. Vargas",   estado:"Aprobado",    fecha:"25 ago 2026", riesgo:"Bajo"     as RiskLevel },
-  { id:"INF-2026-079", empresa:"Distribuidora Norte S.A.",  tipo:"Inspección General",  tecnico:"Lic. A. Fernández", estado:"Devuelto",    fecha:"18 ago 2026", riesgo:"Moderado" as RiskLevel },
-];
-const CAL_EVENTS: Record<number, { label:string; color:string }[]> = {
-  1:  [{ label:"EBR-0089", color:"#F6E53B" }],
-  2:  [{ label:"EBR-0088", color:"#3BF6E5" }],
-  4:  [{ label:"ALP-042",  color:"#E53BF6" }],
-  8:  [{ label:"EBR-0091", color:"#3BF6E5" }, { label:"EBR-0092", color:"#22c55e" }],
-  10: [{ label:"DEN-015",  color:"#ef4444" }],
-  15: [{ label:"EBR-0093", color:"#3BF6E5" }],
-  17: [{ label:"EBR-0094", color:"#F6E53B" }],
-  22: [{ label:"EBR-0095", color:"#3BF6E5" }, { label:"EBR-0096", color:"#3BF6E5" }],
-  25: [{ label:"ALP-043",  color:"#E53BF6" }],
-  29: [{ label:"EBR-0097", color:"#22c55e" }],
+
+const CASE_STATUS_LABEL: Record<string, EvalStatus> = {
+  PENDING_ASSIGNMENT: "Pendiente",
+  ASSIGNED: "Programada",
+  SCHEDULED: "Programada",
+  IN_EVALUATION: "En Curso",
+  PENDING_REPORT: "En Revisión",
+  IN_REVIEW: "En Revisión",
+  CORRECTION_REQUIRED: "En Revisión",
+  APPROVED: "Completada",
+  CLOSED: "Completada",
+  CANCELLED: "Pendiente",
 };
+const caseStatusLabel = (status: string): EvalStatus => CASE_STATUS_LABEL[status] ?? "Pendiente";
+const initialsOf = (name: string): string =>
+  name.trim().split(/\s+/).slice(0, 2).map(part => part[0]?.toUpperCase() ?? "").join("") || "?";
+/* Capacidad de referencia por técnico: el backend no expone un máximo de casos
+   por técnico, se usa una constante para el indicador de carga. */
+const TECH_MAX_CASES = 8;
 
 /* ── Nav ────────────────────────────────────────────────────────────── */
 const NAV: { id:Section; label:string; badge?:number; icon:(c:string)=>React.ReactNode }[] = [
@@ -155,9 +135,10 @@ const NAV: { id:Section; label:string; badge?:number; icon:(c:string)=>React.Rea
   { id:"denuncias",    label:"Denuncias",      badge:1, icon:c=><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke={c} strokeWidth="1.75"/><path d="M12 8v4M12 16h.01" stroke={c} strokeWidth="1.75" strokeLinecap="round"/></svg> },
   { id:"asignaciones", label:"Asignaciones",   badge:5, icon:c=><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" stroke={c} strokeWidth="1.75"/><circle cx="9" cy="7" r="4" stroke={c} strokeWidth="1.75"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" stroke={c} strokeWidth="1.75" strokeLinecap="round"/></svg> },
   { id:"reportes",     label:"Reportes",       icon:c=><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke={c} strokeWidth="1.75"/><polyline points="14,2 14,8 20,8" stroke={c} strokeWidth="1.75"/><line x1="16" y1="13" x2="8" y2="13" stroke={c} strokeWidth="1.75" strokeLinecap="round"/><line x1="16" y1="17" x2="8" y2="17" stroke={c} strokeWidth="1.75" strokeLinecap="round"/></svg> },
+  { id:"historico",    label:"Consulta histórica", icon:c=><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M3 3v5h5" stroke={c} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/><path d="M3.05 13A9 9 0 106 5.3L3 8" stroke={c} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/><path d="M12 7v5l4 2" stroke={c} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/></svg> },
   { id:"configuracion",label:"Configuración",  icon:c=><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke={c} strokeWidth="1.75"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke={c} strokeWidth="1.75"/></svg> },
 ];
-const NAV_VISIBLE_IDS: Section[] = ["inicio","evaluaciones","calendario","alertas","denuncias","asignaciones","reportes","configuracion"];
+const NAV_VISIBLE_IDS: Section[] = ["inicio","evaluaciones","calendario","alertas","denuncias","asignaciones","reportes","historico","configuracion"];
 
 /* ── Small reusable components ──────────────────────────────────────── */
 function Chip({ label, color, bg, border }: { label:string; color:string; bg:string; border:string }) {
@@ -193,14 +174,23 @@ function GlassCard({ children, accent, style }: { children:React.ReactNode; acce
 /* ─────────────────────────────────────────────────────────────────────
    Section: Inicio
 ───────────────────────────────────────────────────────────────────── */
-function InicioSection({ onNavigate, casos }: { onNavigate:(s:Section)=>void; casos:Caso[] }) {
+function InicioSection({ onNavigate, casos, metrics, activeAlerts, activeComplaints }: {
+  onNavigate:(s:Section)=>void; casos:Caso[];
+  metrics: DashboardMetrics | null; activeAlerts: number; activeComplaints: number;
+}) {
   const pendientes = casos.filter(c=>!c.asignado).length;
+  const statusCount = (status:string) => metrics?.byStatus.find(s=>s.status===status)?.count ?? 0;
+  const programadas = statusCount("SCHEDULED") + statusCount("ASSIGNED");
+  const enCurso = statusCount("IN_EVALUATION");
+  const completadas = statusCount("APPROVED") + statusCount("CLOSED");
+  const totalCasos = metrics?.totalCases ?? casos.length;
   const metricCards = [
-    { label:"Casos pendientes",        value:pendientes, delta:`${pendientes} sin asignar`, color:"#3BF6E5", section:"asignaciones" as Section },
-    { label:"Evaluaciones programadas",value:8,          delta:"3 en curso",                color:"#22c55e", section:"evaluaciones"  as Section },
-    { label:"Alertas LAPCH",           value:2,          delta:"Urgentes",                  color:"#E53BF6", section:"alertas"       as Section },
-    { label:"Denuncias",               value:5,          delta:"+1 nueva",                  color:"#F6E53B", section:"denuncias"     as Section },
+    { label:"Casos pendientes",        value:pendientes,   delta:`${pendientes} sin asignar`, color:"#3BF6E5", section:"asignaciones" as Section },
+    { label:"Evaluaciones programadas",value:programadas,  delta:`${enCurso} en curso`,       color:"#22c55e", section:"evaluaciones"  as Section },
+    { label:"Alertas LAPCH",           value:activeAlerts, delta:"Activas",                   color:"#E53BF6", section:"alertas"       as Section },
+    { label:"Denuncias",               value:activeComplaints, delta:"Activas",               color:"#F6E53B", section:"denuncias"     as Section },
   ];
+  const progressPct = totalCasos > 0 ? Math.round((completadas / totalCasos) * 100) : 0;
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
@@ -226,15 +216,14 @@ function InicioSection({ onNavigate, casos }: { onNavigate:(s:Section)=>void; ca
       <GlassCard accent="#3BF6E5">
         <div style={{ padding:"16px 20px" }}>
           <div style={{ display:"flex", justifyContent:"space-between", marginBottom:12 }}>
-            <span style={{ fontSize:"0.68rem", fontWeight:700, color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif", textTransform:"uppercase", letterSpacing:"0.08em" }}>Avance semanal · Evaluaciones</span>
-            <span style={{ fontSize:"0.68rem", color:"#3BF6E5", fontFamily:"Poppins, sans-serif", fontWeight:700 }}>5 / 8</span>
+            <span style={{ fontSize:"0.68rem", fontWeight:700, color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif", textTransform:"uppercase", letterSpacing:"0.08em" }}>Expedientes cerrados / aprobados</span>
+            <span style={{ fontSize:"0.68rem", color:"#3BF6E5", fontFamily:"Poppins, sans-serif", fontWeight:700 }}>{completadas} / {totalCasos}</span>
           </div>
           <div style={{ height:6, borderRadius:99, background:"rgba(255,255,255,0.06)", overflow:"hidden" }}>
-            <div style={{ height:"100%", width:"62.5%", background:"linear-gradient(90deg, #3BF6E5, #06b6d4)", borderRadius:99, boxShadow:"0 0 12px rgba(59,246,229,0.5)" }} />
+            <div style={{ height:"100%", width:`${progressPct}%`, background:"linear-gradient(90deg, #3BF6E5, #06b6d4)", borderRadius:99, boxShadow:"0 0 12px rgba(59,246,229,0.5)" }} />
           </div>
-          <div style={{ display:"flex", justifyContent:"space-between", marginTop:8 }}>
-            <span style={{ fontSize:"0.56rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif" }}>Sem. 01 – 07 sep 2026</span>
-            <span style={{ fontSize:"0.56rem", color:"#3BF6E5", fontFamily:"Poppins, sans-serif", fontWeight:700 }}>62.5% completado</span>
+          <div style={{ display:"flex", justifyContent:"flex-end", marginTop:8 }}>
+            <span style={{ fontSize:"0.56rem", color:"#3BF6E5", fontFamily:"Poppins, sans-serif", fontWeight:700 }}>{progressPct}% completado</span>
           </div>
         </div>
       </GlassCard>
@@ -265,17 +254,13 @@ function InicioSection({ onNavigate, casos }: { onNavigate:(s:Section)=>void; ca
       )}
 
       <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-        <p style={{ fontSize:"0.6rem", fontWeight:700, color:"rgba(148,163,184,0.3)", letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif" }}>ACTIVIDAD DE HOY</p>
-        {[
-          { time:"09:00", label:"EBR-0089 iniciada – Farmacéutica del Sur", color:"#F6E53B" },
-          { time:"10:30", label:"Alerta ALP-2026-042 recibida – Procede evaluación", color:"#E53BF6" },
-          { time:"11:15", label:"Informe INF-083 en revisión – Laboratorio Santos Cruz", color:"#8b5cf6" },
-          { time:"14:00", label:`${pendientes} casos sin asignar – Ver asignaciones`, color:"rgba(148,163,184,0.4)" },
-        ].map(ev=>(
-          <div key={ev.time} style={{ display:"flex", alignItems:"center", gap:12 }}>
-            <span style={{ fontSize:"0.6rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.3)", flexShrink:0, width:38 }}>{ev.time}</span>
-            <div style={{ width:6, height:6, borderRadius:"50%", background:ev.color, flexShrink:0, boxShadow:`0 0 6px ${ev.color}` }}/>
-            <span style={{ fontSize:"0.72rem", color:"rgba(148,163,184,0.6)", fontFamily:"Poppins, sans-serif" }}>{ev.label}</span>
+        <p style={{ fontSize:"0.6rem", fontWeight:700, color:"rgba(148,163,184,0.3)", letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif" }}>EXPEDIENTES RECIENTES</p>
+        {casos.length === 0 && <span style={{ fontSize:"0.72rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>Sin expedientes registrados.</span>}
+        {casos.slice(0,5).map(caso=>(
+          <div key={caso.id} style={{ display:"flex", alignItems:"center", gap:12 }}>
+            <span style={{ fontSize:"0.6rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.3)", flexShrink:0, width:60 }}>{caso.id}</span>
+            <div style={{ width:6, height:6, borderRadius:"50%", background: caso.asignado ? "#22c55e" : "#E53BF6", flexShrink:0, boxShadow:`0 0 6px ${caso.asignado ? "#22c55e" : "#E53BF6"}` }}/>
+            <span style={{ fontSize:"0.72rem", color:"rgba(148,163,184,0.6)", fontFamily:"Poppins, sans-serif" }}>{caso.empresa} · {caso.tipo} · {caso.fecha}</span>
           </div>
         ))}
       </div>
@@ -286,18 +271,21 @@ function InicioSection({ onNavigate, casos }: { onNavigate:(s:Section)=>void; ca
 /* ─────────────────────────────────────────────────────────────────────
    Section: Evaluaciones
 ───────────────────────────────────────────────────────────────────── */
-function EvaluacionesSection() {
+function EvaluacionesSection({ casos, loading, error }: { casos:Caso[]; loading:boolean; error:string }) {
   const [filter, setFilter] = useState<EvalStatus|"Todas">("Todas");
-  const filtered = filter==="Todas" ? EVALUACIONES_DATA : EVALUACIONES_DATA.filter(e=>e.estado===filter);
+  const filtered = filter==="Todas" ? casos : casos.filter(e=>e.estado===filter);
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-      <SectionHeader title="Evaluaciones" subtitle={`${EVALUACIONES_DATA.length} evaluaciones registradas`}/>
+      <SectionHeader title="Evaluaciones" subtitle={`${casos.length} expediente${casos.length!==1?"s":""} registrado${casos.length!==1?"s":""}`}/>
       <div className="hide-scroll" style={{ display:"flex", gap:7, overflowX:"auto", flexShrink:0 }}>
         {(["Todas","En Curso","Programada","Completada","En Revisión","Pendiente"] as const).map(f=>{
           const active=filter===f; const c=f==="Todas"?"rgba(148,163,184,0.7)":EVAL_STATUS[f as EvalStatus].color;
           return <button key={f} onClick={()=>setFilter(f)} style={{ flexShrink:0, padding:"5px 14px", borderRadius:99, fontSize:"0.65rem", fontWeight:600, fontFamily:"Poppins, sans-serif", cursor:"pointer", background:active?`${c}18`:"rgba(255,255,255,0.04)", borderTop:active?`1px solid ${c}50`:"1px solid rgba(255,255,255,0.09)", borderRight:active?`1px solid ${c}50`:"1px solid rgba(255,255,255,0.09)", borderBottom:active?`1px solid ${c}50`:"1px solid rgba(255,255,255,0.09)", borderLeft:active?`1px solid ${c}50`:"1px solid rgba(255,255,255,0.09)", color:active?c:"rgba(148,163,184,0.45)" }}>{f}</button>;
         })}
       </div>
+      {loading && <p style={{ color:"#94a3b8", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>Cargando expedientes…</p>}
+      {error && !loading && <p role="alert" style={{ color:"#fda4af", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>{error}</p>}
+      {!loading && !error && filtered.length===0 && <p style={{ color:"rgba(148,163,184,0.55)", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>No hay expedientes para este filtro.</p>}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(290px, 1fr))", gap:12 }}>
         {filtered.map(ev=>{
           const st=EVAL_STATUS[ev.estado];
@@ -313,15 +301,13 @@ function EvaluacionesSection() {
                   <Chip label={ev.estado} color={st.color} bg={st.bg} border={st.border}/>
                 </div>
                 <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
-                  {ev.riesgo && <Chip label={ev.riesgo} color={RISK[ev.riesgo].color} bg={RISK[ev.riesgo].bg} border={RISK[ev.riesgo].color+"40"}/>}
                   <Chip label={ev.priority} color={PRI[ev.priority].color} bg={PRI[ev.priority].bg} border={PRI[ev.priority].border}/>
                 </div>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
                   <div>
-                    <p style={{ fontSize:"0.6rem", color:"rgba(148,163,184,0.35)", fontFamily:"Poppins, sans-serif" }}>{ev.tecnico ?? "Sin asignar"}</p>
+                    <p style={{ fontSize:"0.6rem", color:"rgba(148,163,184,0.35)", fontFamily:"Poppins, sans-serif" }}>{ev.asignado ?? "Sin asignar"}</p>
                     <p style={{ fontSize:"0.6rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif" }}>{ev.fecha}</p>
                   </div>
-                  <button style={{ padding:"6px 12px", borderRadius:9, fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif", cursor:"pointer", background:`${st.color}10`, borderTop:`1px solid ${st.color}40`, borderRight:`1px solid ${st.color}40`, borderBottom:`1px solid ${st.color}40`, borderLeft:`1px solid ${st.color}40`, color:st.color }}>Ver detalle</button>
                 </div>
               </div>
             </GlassCard>
@@ -335,29 +321,41 @@ function EvaluacionesSection() {
 /* ─────────────────────────────────────────────────────────────────────
    Section: Calendario
 ───────────────────────────────────────────────────────────────────── */
-function CalendarioSection() {
-  const days=["L","M","X","J","V","S","D"]; const cells:(number|null)[]=[null,...Array.from({length:30},(_,i)=>i+1)];
+function CalendarioSection({ schedule }: { schedule: ScheduleEntry[] }) {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstWeekday = (new Date(year, month, 1).getDay() + 6) % 7;
+  const days=["L","M","X","J","V","S","D"];
+  const cells:(number|null)[]=[...Array(firstWeekday).fill(null),...Array.from({length:daysInMonth},(_,i)=>i+1)];
+  const byDay = new Map<number, ScheduleEntry[]>();
+  for (const entry of schedule) {
+    const date = new Date(entry.scheduledFor);
+    if (date.getFullYear()===year && date.getMonth()===month) {
+      const list = byDay.get(date.getDate()) ?? []; list.push(entry); byDay.set(date.getDate(), list);
+    }
+  }
+  const monthLabel = now.toLocaleDateString("es-DO", { month:"long", year:"numeric" });
+  const upcoming = [...schedule]
+    .filter(e => new Date(e.scheduledFor) >= new Date(now.toDateString()))
+    .sort((a,b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime());
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
-      <SectionHeader title="Calendario" subtitle="Septiembre 2026"/>
+      <SectionHeader title="Calendario" subtitle={monthLabel}/>
       <GlassCard accent="#3BF6E5">
         <div style={{ padding:"20px" }}>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
-            <button style={{ width:32, height:32, borderRadius:9, background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.5)", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>‹</button>
-            <h3 style={{ fontSize:"0.95rem", fontWeight:800, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>Septiembre 2026</h3>
-            <button style={{ width:32, height:32, borderRadius:9, background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.5)", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>›</button>
-          </div>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:4, marginBottom:8 }}>
             {days.map(d=><div key={d} style={{ textAlign:"center", fontSize:"0.58rem", fontWeight:700, color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif", textTransform:"uppercase", padding:"4px 0" }}>{d}</div>)}
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:4 }}>
             {cells.map((day,i)=>{
-              const events=day?CAL_EVENTS[day]:null; const isToday=day===1;
+              const events=day?byDay.get(day):null; const isToday=day===now.getDate();
               return (
-                <div key={i} style={{ aspectRatio:"1", borderRadius:10, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:3, cursor:day?"pointer":"default", background:isToday?"rgba(59,246,229,0.15)":day?"rgba(255,255,255,0.03)":"transparent", borderTop:isToday?"1px solid rgba(59,246,229,0.5)":"1px solid transparent", borderRight:isToday?"1px solid rgba(59,246,229,0.5)":"1px solid transparent", borderBottom:isToday?"1px solid rgba(59,246,229,0.5)":"1px solid transparent", borderLeft:isToday?"1px solid rgba(59,246,229,0.5)":"1px solid transparent" }}>
+                <div key={i} style={{ aspectRatio:"1", borderRadius:10, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:3, background:isToday?"rgba(59,246,229,0.15)":day?"rgba(255,255,255,0.03)":"transparent", border:isToday?"1px solid rgba(59,246,229,0.5)":"1px solid transparent" }}>
                   {day && <>
                     <span style={{ fontSize:"0.7rem", fontWeight:isToday?800:400, color:isToday?"#3BF6E5":"rgba(148,163,184,0.65)", fontFamily:"Poppins, sans-serif" }}>{day}</span>
-                    {events && <div style={{ display:"flex", gap:2, flexWrap:"wrap", justifyContent:"center" }}>{events.slice(0,3).map((ev,ei)=><span key={ei} style={{ width:5, height:5, borderRadius:"50%", background:ev.color, boxShadow:`0 0 4px ${ev.color}` }}/>)}</div>}
+                    {events && <div style={{ display:"flex", gap:2, flexWrap:"wrap", justifyContent:"center" }}>{events.slice(0,3).map((_,ei)=><span key={ei} style={{ width:5, height:5, borderRadius:"50%", background:"#3BF6E5", boxShadow:"0 0 4px #3BF6E5" }}/>)}</div>}
                   </>}
                 </div>
               );
@@ -367,16 +365,20 @@ function CalendarioSection() {
       </GlassCard>
       <GlassCard>
         <div style={{ padding:"16px 20px" }}>
-          <p style={{ fontSize:"0.6rem", fontWeight:700, color:"rgba(148,163,184,0.3)", letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif", marginBottom:12 }}>EVENTOS DEL MES</p>
-          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-            {[{day:"01 sep",label:"EBR-0089 – Farmacéutica del Sur",color:"#F6E53B"},{day:"02 sep",label:"EBR-0088 – Constructora García",color:"#3BF6E5"},{day:"04 sep",label:"Alerta ALP-042 – Proc. evaluación",color:"#E53BF6"},{day:"08 sep",label:"EBR-0091 + EBR-0092 programadas",color:"#3BF6E5"},{day:"10 sep",label:"Denuncia DEN-015 – Seguimiento",color:"#ef4444"},{day:"15 sep",label:"EBR-0093 – Alimentos del Caribe",color:"#3BF6E5"},{day:"22 sep",label:"EBR-0095 + EBR-0096 programadas",color:"#3BF6E5"},{day:"25 sep",label:"Alerta ALP-043 – Nueva alerta",color:"#E53BF6"}].map(ev=>(
-              <div key={ev.day} style={{ display:"flex", alignItems:"center", gap:10 }}>
-                <span style={{ fontSize:"0.58rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.3)", flexShrink:0, width:42 }}>{ev.day}</span>
-                <span style={{ width:7, height:7, borderRadius:"50%", background:ev.color, flexShrink:0, boxShadow:`0 0 6px ${ev.color}` }}/>
-                <span style={{ fontSize:"0.7rem", color:"rgba(148,163,184,0.55)", fontFamily:"Poppins, sans-serif" }}>{ev.label}</span>
+          <p style={{ fontSize:"0.6rem", fontWeight:700, color:"rgba(148,163,184,0.3)", letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif", marginBottom:12 }}>PRÓXIMAS EVALUACIONES</p>
+          {upcoming.length === 0
+            ? <p style={{ fontSize:"0.7rem", color:"rgba(148,163,184,0.55)", fontFamily:"Poppins, sans-serif" }}>No hay evaluaciones programadas en la agenda.</p>
+            : (
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {upcoming.map(entry=>(
+                  <div key={`${entry.caseId}-${entry.scheduledFor}`} style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <span style={{ fontSize:"0.58rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.3)", flexShrink:0, width:80 }}>{new Date(entry.scheduledFor).toLocaleDateString("es-DO",{day:"2-digit",month:"short"})}</span>
+                    <span style={{ width:7, height:7, borderRadius:"50%", background:"#3BF6E5", flexShrink:0, boxShadow:"0 0 6px #3BF6E5" }}/>
+                    <span style={{ fontSize:"0.7rem", color:"rgba(148,163,184,0.55)", fontFamily:"Poppins, sans-serif" }}>{entry.companyName} · CAS-{entry.caseId} · {new Date(entry.scheduledFor).toLocaleTimeString("es-DO",{hour:"2-digit",minute:"2-digit"})}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            )}
         </div>
       </GlassCard>
     </div>
@@ -519,8 +521,9 @@ function AsignacionesSection({ casos, onOpenCaso }: {
 /* ─────────────────────────────────────────────────────────────────────
    Section: Asignar Caso (full-page picker)
 ───────────────────────────────────────────────────────────────────── */
-function AsignarCasoSection({ caso, onConfirm, onBack }: {
+function AsignarCasoSection({ caso, technicians, onConfirm, onBack }: {
   caso: Caso;
+  technicians: Tecnico[];
   onConfirm: (tech: Tecnico) => void;
   onBack: () => void;
 }) {
@@ -531,7 +534,7 @@ function AsignarCasoSection({ caso, onConfirm, onBack }: {
   const [confirming,setConfirming]= useState(false);
 
   const p = PRI[caso.priority];
-  const selectedTech = TECHNICIANS.find(t=>t.id===selectedTechId);
+  const selectedTech = technicians.find(t=>t.id===selectedTechId);
 
   const handleConfirm = () => {
     if (!selectedTech) return;
@@ -598,8 +601,9 @@ function AsignarCasoSection({ caso, onConfirm, onBack }: {
 
       {/* Technician picker */}
       <p style={{ fontSize:"0.58rem", fontWeight:700, color:"rgba(148,163,184,0.3)", textTransform:"uppercase", letterSpacing:"0.12em", fontFamily:"Poppins, sans-serif", marginBottom:10 }}>SELECCIONAR TÉCNICO EVALUADOR</p>
+      {technicians.length === 0 && <p style={{ fontSize:"0.7rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif", marginBottom:12 }}>No hay técnicos evaluadores aprobados disponibles.</p>}
       <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:16 }}>
-        {TECHNICIANS.map(tech=>{
+        {technicians.map(tech=>{
           const isSelected = selectedTechId===tech.id;
           const isDisabled = tech.status==="Descanso";
           const statusColor= techStatusColor(tech.status);
@@ -750,34 +754,28 @@ function ConfirmacionSection({ caso, tecnico, onGoAsignaciones, onGoInicio }: {
 /* ─────────────────────────────────────────────────────────────────────
    Section: Reportes
 ───────────────────────────────────────────────────────────────────── */
-function ReportesSection({ onToast }:{ onToast:(m:string)=>void }) {
-  const statusStyle: Record<string,{color:string;bg:string;border:string}> = {
-    "En Revisión":{ color:"#8b5cf6", bg:"rgba(139,92,246,0.1)", border:"rgba(139,92,246,0.35)" },
-    "Aprobado":   { color:"#22c55e", bg:"rgba(34,197,94,0.1)",  border:"rgba(34,197,94,0.35)"  },
-    "Devuelto":   { color:"#E53BF6", bg:"rgba(229,59,246,0.1)", border:"rgba(229,59,246,0.35)" },
-  };
+function ReportesSection({ casos, loading, error }:{ casos:Caso[]; loading:boolean; error:string }) {
+  /* Expedientes en fase de informe/revisión, derivados de /api/cases. La
+     aprobación/devolución de cada informe se realiza en el detalle de la
+     evaluación (`POST /api/evaluations/{id}/report/review`). */
+  const rows = casos.filter(c => c.estado === "En Revisión");
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-      <SectionHeader title="Reportes" subtitle="Revisión y aprobación de informes"/>
-      {REPORTES_DATA.map(rep=>{
-        const st=statusStyle[rep.estado];
-        return <GlassCard key={rep.id} accent={RISK[rep.riesgo].color}>
+      <SectionHeader title="Reportes" subtitle="Expedientes en fase de informe y revisión"/>
+      {loading && <p style={{ color:"#94a3b8", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>Cargando expedientes…</p>}
+      {error && !loading && <p role="alert" style={{ color:"#fda4af", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>{error}</p>}
+      {!loading && !error && rows.length === 0 && <p style={{ color:"rgba(148,163,184,0.55)", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>No hay expedientes pendientes de informe o revisión.</p>}
+      {rows.map(rep=>(
+        <GlassCard key={rep.id} accent="#8b5cf6">
           <div style={{ padding:"16px 18px", display:"flex", flexDirection:"column", gap:10 }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-              <div><span style={{ fontSize:"0.52rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.25)" }}>{rep.id}</span><p style={{ fontSize:"0.88rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{rep.empresa}</p><p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>{rep.tipo} · {rep.tecnico}</p></div>
-              <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:6 }}><Chip label={rep.estado} color={st.color} bg={st.bg} border={st.border}/><Chip label={rep.riesgo} color={RISK[rep.riesgo].color} bg={RISK[rep.riesgo].bg} border={RISK[rep.riesgo].color+"40"}/></div>
+              <div><span style={{ fontSize:"0.52rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.25)" }}>{rep.id}</span><p style={{ fontSize:"0.88rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{rep.empresa}</p><p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>{rep.tipo} · {rep.asignado ?? "Sin asignar"}</p></div>
+              <Chip label={rep.estado} color="#8b5cf6" bg="rgba(139,92,246,0.1)" border="rgba(139,92,246,0.35)"/>
             </div>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <span style={{ fontSize:"0.6rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif" }}>{rep.fecha}</span>
-              <div style={{ display:"flex", gap:7 }}>
-                {rep.estado==="En Revisión" && <><button onClick={()=>onToast("Informe aprobado · "+rep.id)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(34,197,94,0.1)", borderTop:"1px solid rgba(34,197,94,0.35)", borderRight:"1px solid rgba(34,197,94,0.35)", borderBottom:"1px solid rgba(34,197,94,0.35)", borderLeft:"1px solid rgba(34,197,94,0.35)", color:"#22c55e", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Aprobar</button><button onClick={()=>onToast("Informe devuelto · "+rep.id)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(229,59,246,0.08)", borderTop:"1px solid rgba(229,59,246,0.3)", borderRight:"1px solid rgba(229,59,246,0.3)", borderBottom:"1px solid rgba(229,59,246,0.3)", borderLeft:"1px solid rgba(229,59,246,0.3)", color:"#E53BF6", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Devolver</button></>}
-                {rep.estado==="Aprobado" && <button onClick={()=>onToast("PDF descargado · "+rep.id)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.3)", borderRight:"1px solid rgba(34,197,94,0.3)", borderBottom:"1px solid rgba(34,197,94,0.3)", borderLeft:"1px solid rgba(34,197,94,0.3)", color:"#22c55e", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Descargar PDF</button>}
-                {rep.estado==="Devuelto" && <button onClick={()=>onToast("Corrección solicitada · "+rep.id)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(229,59,246,0.08)", borderTop:"1px solid rgba(229,59,246,0.3)", borderRight:"1px solid rgba(229,59,246,0.3)", borderBottom:"1px solid rgba(229,59,246,0.3)", borderLeft:"1px solid rgba(229,59,246,0.3)", color:"#E53BF6", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Solicitar corrección</button>}
-              </div>
-            </div>
+            <span style={{ fontSize:"0.6rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif" }}>{rep.fecha}</span>
           </div>
-        </GlassCard>;
-      })}
+        </GlassCard>
+      ))}
     </div>
   );
 }
@@ -843,16 +841,57 @@ export default function CoordinatorDashboard({
   const [toast,         setToast]        = useState<string|null>(null);
   const [alertas,       setAlertas]      = useState<AlertaItem[]>([]);
   const [denuncias,     setDenuncias]    = useState<DenunciaItem[]>([]);
+  const [metrics,       setMetrics]      = useState<DashboardMetrics|null>(null);
+  const [technicians,   setTechnicians]  = useState<Tecnico[]>([]);
+  const [schedule,      setSchedule]     = useState<ScheduleEntry[]>([]);
+  const [casesLoading,  setCasesLoading] = useState(true);
+  const [casesError,    setCasesError]   = useState("");
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(()=>setToast(null), 2800); };
 
+  const SOURCE_LABEL: Record<string,string> = {
+    BPM_REQUEST: "Solicitud BPM", HEALTH_ALERT: "Alerta LAPCH",
+    COMPLAINT: "Denuncia", INSTITUTIONAL: "Programación institucional",
+  };
+
   useEffect(() => {
-    void Promise.all([listAlerts(accessToken), listComplaints(accessToken), listCompanies(accessToken)])
-      .then(([alertsData, complaintsData, companies]) => {
+    setCasesLoading(true);
+    setCasesError("");
+    const monthAgo = new Date(Date.now() - 30 * 864e5).toISOString();
+    const inTwoMonths = new Date(Date.now() + 60 * 864e5).toISOString();
+    void Promise.all([
+      listAlerts(accessToken), listComplaints(accessToken), listCompanies(accessToken), listCases(accessToken),
+      getDashboard(accessToken).catch(() => null),
+      listTechnicians(accessToken).catch(() => []),
+      listSchedule(accessToken, monthAgo, inTwoMonths).catch(() => []),
+    ])
+      .then(([alertsData, complaintsData, companies, caseData, dashboardData, technicianData, scheduleData]) => {
         setAlertas(alertsData.map(a => toAlertaItem(a, companies)));
         setDenuncias(complaintsData.map(toDenunciaItem));
+        setMetrics(dashboardData);
+        setSchedule(scheduleData);
+        setTechnicians(technicianData.map(tech => ({
+          id: tech.id, name: tech.fullName, initials: initialsOf(tech.fullName),
+          status: "Disponible", specialty: "Técnico Evaluador",
+          cases: tech.activeCaseCount, maxCases: TECH_MAX_CASES, zona: "—",
+        })));
+        setCasos(caseData.map(item => ({
+          id: `CAS-${item.id}`, rawId: item.id,
+          empresa: companies.find(company => company.id === item.companyId)?.tradeName ?? `Empresa #${item.companyId}`,
+          tipo: SOURCE_LABEL[item.sourceType] ?? item.sourceType,
+          zona: "Sin ubicación",
+          fecha: formatFecha(item.createdAt), priority: "Media",
+          asignado: item.status === "PENDING_ASSIGNMENT" ? null : "Asignado",
+          estado: caseStatusLabel(item.status),
+          solicitudId: item.sourceType === "BPM_REQUEST" ? `SOL-${item.sourceReferenceId}` : undefined,
+        })));
+        setCasesLoading(false);
       })
-      .catch(error => showToast(error instanceof Error ? error.message : "No fue posible cargar alertas y denuncias."));
+      .catch(error => {
+        setCasesError(error instanceof Error ? error.message : "No fue posible cargar la información operativa.");
+        setCasesLoading(false);
+        showToast(error instanceof Error ? error.message : "No fue posible cargar la información operativa.");
+      });
   }, [accessToken]);
 
   const navigate = (s: Section) => { setSection(s); if(isMobile) setDrawer(false); };
@@ -954,10 +993,7 @@ export default function CoordinatorDashboard({
               {pendingCount>0 && <div style={{ display:"flex", alignItems:"center", gap:6, padding:"5px 11px", borderRadius:99, background:"rgba(229,59,246,0.08)", borderTop:"1px solid rgba(229,59,246,0.25)", borderRight:"1px solid rgba(229,59,246,0.25)", borderBottom:"1px solid rgba(229,59,246,0.25)", borderLeft:"1px solid rgba(229,59,246,0.25)" }}>
                 <span style={{ fontSize:"0.6rem", fontWeight:700, color:"#E53BF6", fontFamily:"Poppins, sans-serif" }}>{pendingCount} pendiente{pendingCount!==1?"s":""}</span>
               </div>}
-              <div style={{ display:"flex", alignItems:"center", gap:6, padding:"5px 11px", borderRadius:99, background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.25)", borderRight:"1px solid rgba(34,197,94,0.25)", borderBottom:"1px solid rgba(34,197,94,0.25)", borderLeft:"1px solid rgba(34,197,94,0.25)" }}>
-                <span style={{ width:6, height:6, borderRadius:"50%", background:"#22c55e", boxShadow:"0 0 6px #22c55e", display:"inline-block", animation:"cdPulse 2.5s ease-in-out infinite" }}/>
-                <span style={{ fontSize:"0.6rem", fontWeight:700, color:"#22c55e", fontFamily:"Poppins, sans-serif" }}>Online</span>
-              </div>
+                {accessToken && <NotificationsBell accessToken={accessToken} accent="#E53BF6" />}
               {isMobile && (
                 <button onClick={onBack} title="Cerrar sesión" style={{ width:36, height:36, borderRadius:10, background:"rgba(229,59,246,0.08)", border:"1px solid rgba(229,59,246,0.25)", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer" }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" stroke="#E53BF6" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -967,15 +1003,16 @@ export default function CoordinatorDashboard({
           </header>
 
           <div key={section} className="hide-scroll" style={{ flex:1, overflowY:"auto", padding:isMobile?"16px 14px 84px":"24px 28px 36px" }}>
-            {section==="inicio"        && <InicioSection onNavigate={navigate} casos={casos}/>}
-            {section==="evaluaciones"  && <EvaluacionesSection/>}
-            {section==="calendario"    && <CalendarioSection/>}
+            {section==="inicio"        && <InicioSection onNavigate={navigate} casos={casos} metrics={metrics} activeAlerts={alertas.filter(a=>a.estado==="Activa").length} activeComplaints={denuncias.filter(d=>d.estado==="Activa").length}/>}
+            {section==="evaluaciones"  && <EvaluacionesSection casos={casos} loading={casesLoading} error={casesError}/>}
+            {section==="calendario"    && <CalendarioSection schedule={schedule}/>}
             {section==="alertas"       && <AlertasSection alertas={alertas} onToast={showToast}/>}
             {section==="denuncias"     && <DenunciasSection denuncias={denuncias} onToast={showToast}/>}
             {section==="asignaciones"  && <AsignacionesSection casos={casos} onOpenCaso={openCaso}/>}
-            {section==="asignar-caso"  && selectedCaso && <AsignarCasoSection caso={selectedCaso} onConfirm={handleConfirmAssignment} onBack={()=>navigate("asignaciones")}/>}
+            {section==="asignar-caso"  && selectedCaso && <AsignarCasoSection caso={selectedCaso} technicians={technicians} onConfirm={handleConfirmAssignment} onBack={()=>navigate("asignaciones")}/>}
             {section==="confirmacion"  && selectedCaso && confirmedTech && <ConfirmacionSection caso={selectedCaso} tecnico={confirmedTech} onGoAsignaciones={()=>navigate("asignaciones")} onGoInicio={()=>navigate("inicio")}/>}
-            {section==="reportes"      && <ReportesSection onToast={showToast}/>}
+            {section==="reportes"      && <ReportesSection casos={casos} loading={casesLoading} error={casesError}/>}
+            {section==="historico"     && <CaseHistoryPanel accessToken={accessToken}/>}
             {section==="configuracion" && <ConfiguracionSection userName={userName} onToast={showToast}/>}
           </div>
         </main>

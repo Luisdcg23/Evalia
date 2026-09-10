@@ -14,6 +14,14 @@ import { login, logout } from "./auth/api";
 import { clearSession, loadSession, saveSession } from "./auth/session";
 import CompanyManagement from "./features/companies/CompanyManagement";
 
+type AppView = "dashboard" | "risk" | "coordinator-dashboard" | "technician-dashboard" | "company-portal" | "user-validation" | "data-management";
+const initialViewForRole = (role: string): AppView => {
+  if (role === "Coordinador") return "coordinator-dashboard";
+  if (role === "Técnico Evaluador") return "technician-dashboard";
+  if (role === "Admin de Empresa" || role === "Usuario Delegado") return "company-portal";
+  return "dashboard";
+};
+
 /* ── Responsive hook ──────────────────────────────────────── */
 function useWidth() {
   const [w, setW] = useState(() => window.innerWidth);
@@ -111,8 +119,11 @@ export default function App() {
   const isMobile  = width < 768;
 
   const [loggedUser, setLoggedUser] = useState<UserInfo | null>(() => loadSession()?.user ?? null);
-  const [view,      setView]      = useState<"dashboard" | "risk" | "coordinator-dashboard" | "technician-dashboard" | "company-portal" | "user-validation" | "data-management">("dashboard");
-  const [authView,  setAuthView]  = useState<"login" | "forgot" | "change-password" | "register" | "registration-pending" | "user-validation">("login");
+  const [view,      setView]      = useState<AppView>(() => {
+    const session = loadSession();
+    return session ? initialViewForRole(session.user.role) : "dashboard";
+  });
+  const [authView,  setAuthView]  = useState<"login" | "forgot" | "change-password" | "register" | "registration-pending">("login");
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [loading,  setLoading]  = useState(false);
@@ -151,10 +162,6 @@ export default function App() {
     return <RegistrationPending onBack={() => setAuthView("login")} />;
   }
 
-  if (!loggedUser && authView === "user-validation") {
-    return <UserValidationModal onClose={() => setAuthView("login")} />;
-  }
-
   const doLogout = () => {
     const session = loadSession();
     clearSession();
@@ -190,6 +197,7 @@ export default function App() {
         <TechnicianDashboard
           userName={loggedUser.name}
           onBack={doLogout}
+          accessToken={loadSession()?.accessToken ?? ""}
         />
       );
     }
@@ -206,6 +214,7 @@ export default function App() {
     return (
       <ResponsiveDashboard
         user={loggedUser}
+        accessToken={loadSession()?.accessToken ?? ""}
         onBack={doLogout}
         onRisk={() => setView("risk")}
         onCompanyProfile={() => {}}
@@ -216,13 +225,6 @@ export default function App() {
       />
     );
   }
-
-  const initialViewForRole = (role: string): typeof view => {
-    if (role === "Coordinador")                                    return "coordinator-dashboard";
-    if (role === "Técnico Evaluador")                             return "technician-dashboard";
-    if (role === "Admin de Empresa" || role === "Usuario Delegado") return "company-portal";
-    return "dashboard";
-  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();

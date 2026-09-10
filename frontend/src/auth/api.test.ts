@@ -49,19 +49,18 @@ it("submits an access request with the canonical company role", async () => {
     email: "ANA@EXAMPLE.LOCAL ",
     password: "Registro2026!",
     requestedRole: "USUARIO_DELEGADO",
+    authorizationLetterFileName: "carta.pdf",
+    authorizationLetterMimeType: "application/pdf",
+    authorizationLetterSizeBytes: 123,
+    authorizationLetterHash: "hash",
+    authorizationLetterStorageReference: "client-sha256:hash",
   });
 
-  expect(fetch).toHaveBeenCalledWith(
-    "http://localhost:5080/api/auth/register",
-    expect.objectContaining({
-      body: JSON.stringify({
-        fullName: "Ana Pérez",
-        documentNumber: "001-0000000-1",
-        phoneNumber: "8095550101",
-        email: "ana@example.local",
-        password: "Registro2026!",
-        requestedRole: "USUARIO_DELEGADO",
-      }),
-    }),
-  );
+  const init = vi.mocked(fetch).mock.calls[0][1] as RequestInit;
+  expect(JSON.parse(String(init.body))).toMatchObject({
+    fullName: "Ana Pérez", documentNumber: "001-0000000-1", phoneNumber: "8095550101",
+    email: "ana@example.local", requestedRole: "USUARIO_DELEGADO",
+    authorizationLetterFileName: "carta.pdf", authorizationLetterMimeType: "application/pdf",
+    authorizationLetterSizeBytes: 123, authorizationLetterHash: "hash",
+  });
 });

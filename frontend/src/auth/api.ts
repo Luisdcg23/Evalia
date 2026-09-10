@@ -25,6 +25,11 @@ export interface RegistrationRequest {
   email: string;
   password: string;
   requestedRole: "ADMINISTRADOR_EMPRESA" | "USUARIO_DELEGADO";
+  authorizationLetterFileName: string;
+  authorizationLetterMimeType: string;
+  authorizationLetterSizeBytes: number;
+  authorizationLetterHash: string;
+  authorizationLetterStorageReference: string;
 }
 
 export interface PendingUser {

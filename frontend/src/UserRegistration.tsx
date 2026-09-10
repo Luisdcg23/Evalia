@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import evaliaLogo from "@/imports/Disen_o_sin_ti_tulo.png";
 import { register } from "./auth/api";
+import { createDocumentMetadata } from "./features/documents/metadata";
 
 /* ── Responsive hook ─────────────────────────────────────────── */
 function useWidth() {
@@ -274,7 +275,7 @@ export default function UserRegistration({ onBack, onSuccess }: { onBack: () => 
   const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
 
-  const [file,       setFile]       = useState<{ name: string; size: number } | null>(null);
+  const [file,       setFile]       = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -295,7 +296,7 @@ export default function UserRegistration({ onBack, onSuccess }: { onBack: () => 
     setIsDragging(false);
     const f = e.dataTransfer.files[0];
     if (f && f.type === "application/pdf") {
-      setFile({ name: f.name, size: f.size });
+      setFile(f);
       setError("");
     } else if (f) {
       setError("Solo se aceptan archivos PDF.");
@@ -303,7 +304,8 @@ export default function UserRegistration({ onBack, onSuccess }: { onBack: () => 
   };
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (f) { setFile({ name: f.name, size: f.size }); setError(""); }
+    if (f && f.type === "application/pdf") { setFile(f); setError(""); }
+    else if (f) setError("Solo se aceptan archivos PDF.");
     e.target.value = "";
   };
 
@@ -315,6 +317,7 @@ export default function UserRegistration({ onBack, onSuccess }: { onBack: () => 
     setError("");
     setStatus("loading");
     try {
+      const letter = await createDocumentMetadata(file!, "CARTA_AUTORIZACION");
       await register({
         fullName: nombre,
         documentNumber: cedula,
@@ -322,6 +325,11 @@ export default function UserRegistration({ onBack, onSuccess }: { onBack: () => 
         email,
         password,
         requestedRole: role === "admin" ? "ADMINISTRADOR_EMPRESA" : "USUARIO_DELEGADO",
+        authorizationLetterFileName: letter.fileName,
+        authorizationLetterMimeType: letter.mimeType,
+        authorizationLetterSizeBytes: letter.sizeBytes,
+        authorizationLetterHash: letter.hash,
+        authorizationLetterStorageReference: letter.storageReference,
       });
       if (onSuccess) onSuccess();
       else setStatus("success");
@@ -429,8 +437,8 @@ export default function UserRegistration({ onBack, onSuccess }: { onBack: () => 
                 { icon: "📧", text: "Recibirás un correo de confirmación." },
                 { icon: "🔒", text: "Tu carta de autorización fue adjuntada." },
                 { icon: "👤", text: `Rol solicitado: ${role === "admin" ? "Admin. de Empresa" : "Usuario Delegado"}` },
-              ].map(({ icon, text }) => (
-                <div key={text} style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 8, "&:last-child": { marginBottom: 0 } }}>
+              ].map(({ icon, text }, index, list) => (
+                <div key={text} style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: index === list.length - 1 ? 0 : 8 }}>
                   <span style={{ fontSize: "0.75rem" }}>{icon}</span>
                   <span style={{ fontSize: "0.73rem", color: "rgba(148,163,184,0.7)", fontFamily: "Poppins, sans-serif", lineHeight: 1.5 }}>{text}</span>
                 </div>

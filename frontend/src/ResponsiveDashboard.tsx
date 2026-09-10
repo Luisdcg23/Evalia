@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import CompanyProfile from "./CompanyProfile";
+import { getDashboard } from "./features/operations/api";
+import NotificationsBell from "./features/notifications/NotificationsBell";
 
 /* ── Breakpoint hook ─────────────────────────────────────── */
 function useWidth() {
@@ -32,11 +34,7 @@ type EvalStatus = "En Proceso" | "Completada" | "Pendiente" | "Rechazada";
 type AlertSeverity = "Crítica" | "Advertencia" | "Informativa";
 
 /* ── Data ────────────────────────────────────────────────── */
-const stats = [
-  { label: "Evaluaciones Activas",  value: 34,  pct: 68, accent: T.cyan,    trend: "+4 esta sem." },
-  { label: "Tareas Completadas",    value: 127, pct: 82, accent: T.magenta, trend: "+12 este mes" },
-  { label: "Alertas Pendientes",    value: 12,  pct: 30, accent: T.yellow,  trend: "3 críticas"   },
-];
+interface StatItem { label: string; value: number | string; pct: number; accent: string; trend: string }
 
 const rings = [
   { label: "Evaluaciones", pct: 85, color: T.cyan,    r: 88 },
@@ -183,7 +181,7 @@ function trashIcon(c: string) {
 }
 
 /* ── Shared sub-components ───────────────────────────────── */
-function StatCard({ s }: { s: typeof stats[number] }) {
+function StatCard({ s }: { s: StatItem }) {
   return (
     <div style={{ flex: 1, minWidth: 0, padding: "20px", borderRadius: 18, background: T.surface, borderTop: `2px solid ${s.accent}`, borderRight: `1px solid ${T.border}`, borderBottom: `1px solid ${T.border}`, borderLeft: `1px solid ${T.border}`, boxShadow: `0 4px 30px ${s.accent}12`, position: "relative", overflow: "hidden" }}>
       <div style={{ position: "absolute", top: -20, right: -20, width: 80, height: 80, borderRadius: "50%", background: `radial-gradient(ellipse, ${s.accent}1a 0%, transparent 70%)`, pointerEvents: "none" }}/>
@@ -848,13 +846,42 @@ function ConfiguracionSection({ isMobile, onLogout, onUserValidation }: { isMobi
 /* ── Main dashboard ───────────────────────────────────────── */
 export interface UserInfo { name: string; role: string; email: string }
 
-export default function ResponsiveDashboard({ onBack, user, onRisk, onCompanyProfile, onCompanyForm, onCompanyDashboard, onCoordinatorDashboard, onUserValidation }: { onBack: () => void; user?: UserInfo; onRisk?: () => void; onCompanyProfile?: () => void; onCompanyForm?: () => void; onCompanyDashboard?: () => void; onCoordinatorDashboard?: () => void; onUserValidation?: () => void }) {
+export default function ResponsiveDashboard({ onBack, user, accessToken = "", onRisk, onCompanyProfile, onCompanyForm, onCompanyDashboard, onCoordinatorDashboard, onUserValidation }: { onBack: () => void; user?: UserInfo; accessToken?: string; onRisk?: () => void; onCompanyProfile?: () => void; onCompanyForm?: () => void; onCompanyDashboard?: () => void; onCoordinatorDashboard?: () => void; onUserValidation?: () => void }) {
   const width    = useWidth();
   const isMobile = width < 768;
   const isTablet = width >= 768 && width < 1100;
 
   const [sidebarExpanded, setSidebarExpanded] = useState(true);
   const [activeNav, setActiveNav] = useState("dash");
+
+  const [stats, setStats] = useState<StatItem[]>([
+    { label: "Expedientes totales", value: "…", pct: 0, accent: T.cyan, trend: "Cargando" },
+    { label: "En evaluación", value: "…", pct: 0, accent: T.magenta, trend: "Cargando" },
+    { label: "Pendientes de asignación", value: "…", pct: 0, accent: T.yellow, trend: "Cargando" },
+  ]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    let active = true;
+    void getDashboard(accessToken)
+      .then(metrics => {
+        if (!active) return;
+        const total = metrics.totalCases || 1;
+        const count = (status: string) => metrics.byStatus.find(s => s.status === status)?.count ?? 0;
+        const inEval = count("IN_EVALUATION") + count("PENDING_REPORT") + count("IN_REVIEW");
+        const pendingAssign = count("PENDING_ASSIGNMENT");
+        setStats([
+          { label: "Expedientes totales", value: metrics.totalCases, pct: 100, accent: T.cyan, trend: `${count("APPROVED") + count("CLOSED")} cerrados` },
+          { label: "En evaluación", value: inEval, pct: Math.round((inEval / total) * 100), accent: T.magenta, trend: `${count("IN_EVALUATION")} en curso` },
+          { label: "Pendientes de asignación", value: pendingAssign, pct: Math.round((pendingAssign / total) * 100), accent: T.yellow, trend: `${metrics.unreadNotifications} notificación(es)` },
+        ]);
+      })
+      .catch(() => {
+        if (!active) return;
+        setStats(current => current.map(s => ({ ...s, value: "—", trend: "No disponible" })));
+      });
+    return () => { active = false; };
+  }, [accessToken]);
 
   if (!user) return null;
 
@@ -979,10 +1006,13 @@ export default function ResponsiveDashboard({ onBack, user, onRisk, onCompanyPro
                 <span style={{ fontSize: "0.75rem", color: T.txtFaint }}>Buscar…</span>
               </div>
             )}
-            <div style={{ position: "relative", width: 36, height: 36, borderRadius: 10, background: T.surface, border: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-              {bellIcon(T.txtMuted)}
-              <span style={{ position: "absolute", top: 7, right: 7, width: 7, height: 7, borderRadius: "50%", background: T.magenta, border: `2px solid ${T.bg}` }}/>
-            </div>
+            {accessToken
+              ? <NotificationsBell accessToken={accessToken} accent={T.cyan} />
+              : (
+                <div style={{ position: "relative", width: 36, height: 36, borderRadius: 10, background: T.surface, border: `1px solid ${T.border}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {bellIcon(T.txtMuted)}
+                </div>
+              )}
             <div style={{ width: 36, height: 36, borderRadius: 10, background: `linear-gradient(135deg, ${T.magenta}, ${T.cyan})`, padding: 1.5, cursor: "pointer" }}>
               <div style={{ width: "100%", height: "100%", borderRadius: 8, background: "#1e293b", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: "0.8rem", color: T.txt }}>{(user.name?.[0] ?? "U").toUpperCase()}</div>
             </div>

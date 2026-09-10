@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 import { listCompanies } from "./features/companies/api";
-import { createAndSubmitRequest, listBpmRequests, type BpmRequest } from "./features/requests/api";
+import { createAndSubmitRequest, listBpmRequests, type BpmRequest, type BpmRequestDocumentInput } from "./features/requests/api";
+import { createDocumentMetadata } from "./features/documents/metadata";
+import { listMyCases, type MyCaseRow } from "./features/operations/api";
+import NotificationsBell from "./features/notifications/NotificationsBell";
 
 function useWidth() {
   const [w, setW] = useState(() => window.innerWidth);
@@ -22,6 +25,7 @@ interface Solicitud {
   status: SolStatus; fechaLabel: string;
   tecnico: string | null; prioridad: Priority; progreso: number;
   observaciones?: string;
+  document?: BpmRequestDocumentInput;
 }
 
 /* ── Data ───────────────────────────────────────────────────── */
@@ -190,14 +194,14 @@ function SolicitudCard({ sol, onToast, isNew }: { sol:Solicitud; onToast:(m:stri
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Dashboard Empresa ──────────────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function DashboardSection({ solicitudes, onNavigate, onToast }: {
+function DashboardSection({ solicitudes, cases, onNavigate, onToast }: {
   solicitudes: Solicitud[];
+  cases: MyCaseRow[];
   onNavigate: (t:Tab) => void;
   onToast: (m:string) => void;
 }) {
   const pending  = solicitudes.filter(s=>s.status==="Pendiente de Asignación").length;
-  const review   = solicitudes.filter(s=>s.status==="En Revisión").length;
-  const approved = solicitudes.filter(s=>s.status==="Aprobado").length;
+  const approved = cases.filter(c=>["APPROVED","CLOSED"].includes(c.status)).length;
 
   const hora = new Date().getHours();
   const greeting = hora < 12 ? "Buenos días" : hora < 19 ? "Buenas tardes" : "Buenas noches";
@@ -244,22 +248,22 @@ function DashboardSection({ solicitudes, onNavigate, onToast }: {
             <div style={{ width:36, height:36, borderRadius:11, background:"rgba(34,197,94,0.12)", borderTop:"1px solid rgba(34,197,94,0.3)", borderRight:"1px solid rgba(34,197,94,0.3)", borderBottom:"1px solid rgba(34,197,94,0.3)", borderLeft:"1px solid rgba(34,197,94,0.3)", display:"flex", alignItems:"center", justifyContent:"center" }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 11l3 3L22 4" stroke="#22c55e" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke="#22c55e" strokeWidth="1.75"/></svg>
             </div>
-            <span style={{ fontSize:"1.8rem", fontWeight:900, color:"#22c55e", fontFamily:"Poppins, sans-serif", textShadow:"0 0 20px rgba(34,197,94,0.5)" }}>6</span>
+            <span style={{ fontSize:"1.8rem", fontWeight:900, color:"#22c55e", fontFamily:"Poppins, sans-serif", textShadow:"0 0 20px rgba(34,197,94,0.5)" }}>{cases.length}</span>
           </div>
           <p style={{ fontSize:"0.82rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", marginBottom:2 }}>Evaluaciones</p>
           <p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>{approved} aprobada{approved!==1?"s":""}</p>
         </button>
 
-        {/* Notificaciones */}
-        <button onClick={()=>onToast("No hay notificaciones nuevas")} style={{ padding:"18px 20px", borderRadius:16, cursor:"pointer", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderTop:"1px solid rgba(246,229,59,0.15)", borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:"2px solid rgba(246,229,59,0.5)", textAlign:"left" }}>
+        {/* Solicitudes en revisión */}
+        <button onClick={()=>onNavigate("solicitudes")} style={{ padding:"18px 20px", borderRadius:16, cursor:"pointer", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderTop:"1px solid rgba(246,229,59,0.15)", borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:"2px solid rgba(246,229,59,0.5)", textAlign:"left" }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
             <div style={{ width:36, height:36, borderRadius:11, background:"rgba(246,229,59,0.12)", borderTop:"1px solid rgba(246,229,59,0.3)", borderRight:"1px solid rgba(246,229,59,0.3)", borderBottom:"1px solid rgba(246,229,59,0.3)", borderLeft:"1px solid rgba(246,229,59,0.3)", display:"flex", alignItems:"center", justifyContent:"center" }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0" stroke="#F6E53B" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/></svg>
             </div>
-            <span style={{ fontSize:"1.8rem", fontWeight:900, color:"#F6E53B", fontFamily:"Poppins, sans-serif", textShadow:"0 0 20px rgba(246,229,59,0.5)" }}>2</span>
+            <span style={{ fontSize:"1.8rem", fontWeight:900, color:"#F6E53B", fontFamily:"Poppins, sans-serif", textShadow:"0 0 20px rgba(246,229,59,0.5)" }}>{pending}</span>
           </div>
-          <p style={{ fontSize:"0.82rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", marginBottom:2 }}>Notificaciones</p>
-          <p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>2 sin leer</p>
+          <p style={{ fontSize:"0.82rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", marginBottom:2 }}>Pendientes de asignación</p>
+          <p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>Solicitudes en curso</p>
         </button>
       </div>
 
@@ -301,13 +305,17 @@ function NuevaSolicitudSection({ onSubmit, onCancel }: {
   const [prioridad,   setPrioridad]   = useState<Priority>("Media");
   const [submitting,  setSubmitting]  = useState(false);
   const [hasDraft,    setHasDraft]    = useState(false);
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [formError, setFormError] = useState("");
 
-  const canSubmit = tipoEstab && motivo;
+  const canSubmit = Boolean(tipoEstab && motivo && documentFile);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!canSubmit) return;
     setSubmitting(true);
-    setTimeout(() => {
+    setFormError("");
+    try {
+      const document = await createDocumentMetadata(documentFile!, "SOLICITUD_BPM");
       const nextId = `SOL-2026-${String(Math.floor(43 + Math.random() * 10)).padStart(4,"0")}`;
       const titulo = motivo === "Otro" ? (observ.split(" ").slice(0,4).join(" ") || "Nueva Solicitud") : motivo;
       const newSol: Solicitud = {
@@ -321,9 +329,13 @@ function NuevaSolicitudSection({ onSubmit, onCancel }: {
         prioridad,
         progreso: 0,
         observaciones: observ,
+        document,
       };
       onSubmit(newSol);
-    }, 1600);
+    } catch {
+      setFormError("No fue posible preparar el documento seleccionado.");
+      setSubmitting(false);
+    }
   };
 
   const handleDraft = () => {
@@ -395,10 +407,16 @@ function NuevaSolicitudSection({ onSubmit, onCancel }: {
           {/* Documentación placeholder */}
           <div>
             <p style={{ fontSize:"0.58rem", fontWeight:700, color:"rgba(148,163,184,0.3)", textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"Poppins, sans-serif", marginBottom:8 }}>DOCUMENTACIÓN OBLIGATORIA</p>
-            <div style={{ borderRadius:14, padding:"20px", borderTop:"1.5px dashed rgba(255,255,255,0.12)", borderRight:"1.5px dashed rgba(255,255,255,0.12)", borderBottom:"1.5px dashed rgba(255,255,255,0.12)", borderLeft:"1.5px dashed rgba(255,255,255,0.12)", background:"rgba(255,255,255,0.02)", display:"flex", flexDirection:"column", alignItems:"center", gap:8, cursor:"pointer" }}>
+            <label style={{ borderRadius:14, padding:"20px", border:"1.5px dashed rgba(255,255,255,0.12)", background:"rgba(255,255,255,0.02)", display:"flex", flexDirection:"column", alignItems:"center", gap:8, cursor:"pointer" }}>
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="rgba(148,163,184,0.3)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              <p style={{ fontSize:"0.75rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif", textAlign:"center" }}>Adjuntar documentos<br/><span style={{ fontSize:"0.62rem", opacity:0.6 }}>PDF, JPG, PNG · máx. 10 MB</span></p>
-            </div>
+              <p style={{ fontSize:"0.75rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif", textAlign:"center" }}>{documentFile ? documentFile.name : "Adjuntar documento"}<br/><span style={{ fontSize:"0.62rem", opacity:0.6 }}>PDF, JPG, PNG · máx. 10 MB</span></p>
+              <input type="file" accept="application/pdf,image/jpeg,image/png" hidden onChange={event => {
+                const selected = event.target.files?.[0] ?? null;
+                if (selected && selected.size > 10 * 1024 * 1024) { setFormError("El documento supera el límite de 10 MB."); return; }
+                setDocumentFile(selected); setFormError("");
+              }} />
+            </label>
+            {formError && <p role="alert" style={{ color:"#fb7185", fontSize:"0.7rem", marginTop:6 }}>{formError}</p>}
           </div>
         </div>
       </div>
@@ -417,7 +435,7 @@ function NuevaSolicitudSection({ onSubmit, onCancel }: {
 
       {/* Validation hint */}
       {!canSubmit && (
-        <p style={{ textAlign:"center", fontSize:"0.65rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif", marginTop:6 }}>Completa el tipo de establecimiento y el motivo para enviar.</p>
+        <p style={{ textAlign:"center", fontSize:"0.65rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif", marginTop:6 }}>Completa el tipo, el motivo y adjunta la documentación obligatoria.</p>
       )}
     </div>
   );
@@ -435,8 +453,9 @@ function SolicitudesSection({ solicitudes, newId, onToast, onNavigate }: {
   const [filter, setFilter] = useState<SolStatus|"Todas">("Todas");
   const filtered = filter==="Todas" ? solicitudes : solicitudes.filter(s=>s.status===filter);
 
-  const counts = {
+  const counts: Record<SolStatus | "Todas", number> = {
     "Todas": solicitudes.length,
+    "Borrador":                 solicitudes.filter(s=>s.status==="Borrador").length,
     "Pendiente de Asignación": solicitudes.filter(s=>s.status==="Pendiente de Asignación").length,
     "En Revisión":             solicitudes.filter(s=>s.status==="En Revisión").length,
     "Aprobado":                solicitudes.filter(s=>s.status==="Aprobado").length,
@@ -573,15 +592,23 @@ function PerfilSection({ isMobile, onToast }: { isMobile:boolean; onToast:(m:str
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Evaluaciones (historial) ───────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function EvaluacionesSection({ onToast }: { onToast:(m:string)=>void }) {
-  const EVS = [
-    { id:"EBR-2026-0087", tipo:"Auditoría Calidad",    fecha:"28 ago 2026", tecnico:"Ing. R. Méndez",    estado:"Aprobado",    riesgo:"Alto",     color:"#22c55e" },
-    { id:"EBR-2026-0083", tipo:"Evaluación General",   fecha:"22 ago 2026", tecnico:"Ing. M. Santos",    estado:"En Revisión", riesgo:"Crítico",  color:"#8b5cf6" },
-    { id:"EBR-2026-0071", tipo:"Inspección BPM",       fecha:"10 ago 2026", tecnico:"Lic. C. Vargas",    estado:"Aprobado",    riesgo:"Moderado", color:"#22c55e" },
-    { id:"EBR-2026-0065", tipo:"Inspección Eléctrica", fecha:"02 ago 2026", tecnico:"Lic. A. Fernández", estado:"Aprobado",    riesgo:"Bajo",     color:"#22c55e" },
-    { id:"EBR-2026-0051", tipo:"Auditoría Calidad",    fecha:"15 jul 2026", tecnico:"Ing. R. Méndez",    estado:"Rechazado",   riesgo:"Alto",     color:"#E53BF6" },
-    { id:"EBR-2026-0040", tipo:"Inspección General",   fecha:"01 jul 2026", tecnico:"Ing. M. Santos",    estado:"Aprobado",    riesgo:"Moderado", color:"#22c55e" },
-  ];
+const CASE_STATUS_ES: Record<string, { label: string; color: string }> = {
+  PENDING_ASSIGNMENT:  { label: "Pendiente de asignación", color: "rgba(148,163,184,0.7)" },
+  ASSIGNED:            { label: "Asignado", color: "#3BF6E5" },
+  SCHEDULED:           { label: "Programado", color: "#3BF6E5" },
+  IN_EVALUATION:       { label: "En evaluación", color: "#F6E53B" },
+  PENDING_REPORT:      { label: "Pendiente de informe", color: "#F6E53B" },
+  IN_REVIEW:           { label: "En revisión", color: "#8b5cf6" },
+  CORRECTION_REQUIRED: { label: "Corrección solicitada", color: "#E53BF6" },
+  APPROVED:            { label: "Aprobado", color: "#22c55e" },
+  CLOSED:              { label: "Cerrado", color: "#22c55e" },
+  CANCELLED:           { label: "Cancelado", color: "#E53BF6" },
+};
+
+function EvaluacionesSection({ cases, state, error }: { cases: MyCaseRow[]; state: "loading" | "loaded" | "error"; error: string }) {
+  const aprobadas = cases.filter(c => ["APPROVED", "CLOSED"].includes(c.status)).length;
+  const enRevision = cases.filter(c => ["IN_REVIEW", "PENDING_REPORT"].includes(c.status)).length;
+  const rechazadas = cases.filter(c => c.status === "CANCELLED").length;
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16, maxWidth:820 }}>
       <div style={{ marginBottom:4 }}>
@@ -589,28 +616,33 @@ function EvaluacionesSection({ onToast }: { onToast:(m:string)=>void }) {
         <h2 style={{ fontSize:"1.1rem", fontWeight:800, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", letterSpacing:"-0.02em" }}>Historial de Evaluaciones</h2>
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(120px, 1fr))", gap:9 }}>
-        {[{label:"Total",v:6,c:"rgba(148,163,184,0.6)"},{label:"Aprobadas",v:4,c:"#22c55e"},{label:"En Revisión",v:1,c:"#8b5cf6"},{label:"Rechazadas",v:1,c:"#E53BF6"}].map(s=>(
+        {[{label:"Total",v:cases.length,c:"rgba(148,163,184,0.6)"},{label:"Aprobadas",v:aprobadas,c:"#22c55e"},{label:"En Revisión",v:enRevision,c:"#8b5cf6"},{label:"Canceladas",v:rechazadas,c:"#E53BF6"}].map(s=>(
           <div key={s.label} style={{ borderRadius:13, padding:"12px 14px", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderTop:`1px solid ${s.c}18`, borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:`2px solid ${s.c}55` }}>
-            <p style={{ fontSize:"1.6rem", fontWeight:900, color:s.c, fontFamily:"Poppins, sans-serif", lineHeight:1, textShadow:`0 0 16px ${s.c}40` }}>{s.v}</p>
+            <p style={{ fontSize:"1.6rem", fontWeight:900, color:s.c, fontFamily:"Poppins, sans-serif", lineHeight:1, textShadow:`0 0 16px ${s.c}40` }}>{state === "loading" ? "…" : s.v}</p>
             <p style={{ fontSize:"0.52rem", color:"rgba(148,163,184,0.35)", fontFamily:"Poppins, sans-serif", textTransform:"uppercase", letterSpacing:"0.08em", marginTop:3 }}>{s.label}</p>
           </div>
         ))}
       </div>
+      {state === "loading" && <p style={{ color:"#94a3b8", fontSize:"0.78rem", fontFamily:"Poppins, sans-serif" }}>Cargando evaluaciones…</p>}
+      {state === "error" && <p role="alert" style={{ color:"#fb7185", fontSize:"0.78rem", fontFamily:"Poppins, sans-serif" }}>{error}</p>}
+      {state === "loaded" && cases.length === 0 && <p style={{ color:"rgba(148,163,184,0.4)", fontSize:"0.85rem", fontFamily:"Poppins, sans-serif" }}>Todavía no hay evaluaciones registradas para tu empresa.</p>}
       <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
-        {EVS.map(ev=>(
-          <div key={ev.id} style={{ borderRadius:15, padding:"14px 16px", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderTop:"1px solid rgba(255,255,255,0.07)", borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:`2px solid ${ev.color}55`, display:"flex", alignItems:"center", gap:14 }}>
-            <div style={{ flex:1, minWidth:0 }}>
-              <span style={{ fontSize:"0.48rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.22)" }}>{ev.id}</span>
-              <p style={{ fontSize:"0.88rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{ev.tipo}</p>
-              <p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>{ev.tecnico} · {ev.fecha}</p>
+        {cases.map(ev=>{
+          const meta = CASE_STATUS_ES[ev.status] ?? { label: ev.status, color: "rgba(148,163,184,0.6)" };
+          return (
+            <div key={ev.id} style={{ borderRadius:15, padding:"14px 16px", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderTop:"1px solid rgba(255,255,255,0.07)", borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:`2px solid ${meta.color}55`, display:"flex", alignItems:"center", gap:14 }}>
+              <div style={{ flex:1, minWidth:0 }}>
+                <span style={{ fontSize:"0.48rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.22)" }}>CAS-{ev.id}</span>
+                <p style={{ fontSize:"0.88rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{ev.companyName}</p>
+                <p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>{new Date(ev.createdAt).toLocaleDateString("es-DO")}</p>
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:5 }}>
+                <span style={{ padding:"2px 9px", borderRadius:99, fontSize:"0.6rem", fontWeight:700, color:meta.color, background:`${meta.color}14`, border:`1px solid ${meta.color}40`, fontFamily:"Poppins, sans-serif" }}>{meta.label}</span>
+                {ev.bpmPercentage != null && <span style={{ fontSize:"0.55rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>BPM {Number(ev.bpmPercentage).toFixed(1)}% · {ev.classification ?? "—"}</span>}
+              </div>
             </div>
-            <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:5 }}>
-              <span style={{ padding:"2px 9px", borderRadius:99, fontSize:"0.6rem", fontWeight:700, color:ev.color, background:`${ev.color}14`, borderTop:`1px solid ${ev.color}40`, borderRight:`1px solid ${ev.color}40`, borderBottom:`1px solid ${ev.color}40`, borderLeft:`1px solid ${ev.color}40`, fontFamily:"Poppins, sans-serif" }}>{ev.estado}</span>
-              <span style={{ fontSize:"0.55rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif" }}>{ev.riesgo}</span>
-            </div>
-            {ev.estado==="Aprobado" && <button onClick={()=>onToast("PDF descargado · "+ev.id)} style={{ width:32, height:32, borderRadius:9, cursor:"pointer", background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.3)", borderRight:"1px solid rgba(34,197,94,0.3)", borderBottom:"1px solid rgba(34,197,94,0.3)", borderLeft:"1px solid rgba(34,197,94,0.3)", color:"#22c55e", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></button>}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -685,6 +717,9 @@ export default function CompanyPortal({
   const [companyId, setCompanyId] = useState<number | null>(null);
   const [newEntryId,  setNewEntryId]  = useState<string|null>(null);
   const [toast,       setToast]       = useState<string|null>(null);
+  const [cases,       setCases]       = useState<MyCaseRow[]>([]);
+  const [casesState,  setCasesState]  = useState<"loading" | "loaded" | "error">("loading");
+  const [casesError,  setCasesError]  = useState("");
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(()=>setToast(null), 2800); };
 
@@ -697,6 +732,17 @@ export default function CompanyPortal({
       .catch(error => showToast(error instanceof Error ? error.message : "No fue posible cargar el portal."));
   }, [accessToken]);
 
+  useEffect(() => {
+    setCasesState("loading");
+    setCasesError("");
+    void listMyCases(accessToken)
+      .then(rows => { setCases(rows); setCasesState("loaded"); })
+      .catch(error => {
+        setCasesError(error instanceof Error ? error.message : "No fue posible cargar tus evaluaciones.");
+        setCasesState("error");
+      });
+  }, [accessToken]);
+
   const navigate = (tab: Tab) => {
     setActiveTab(tab);
     if (isMobile) setNavOpen(false);
@@ -707,6 +753,7 @@ export default function CompanyPortal({
     try {
       const result = await createAndSubmitRequest(accessToken, {
         companyId, establishmentType: sol.tipo, reason: sol.motivo, observations: sol.observaciones ?? "",
+        document: sol.document!,
       });
       const persisted = toSolicitud(result.request);
       setSolicitudes(prev => [persisted, ...prev]);
@@ -819,10 +866,7 @@ export default function CompanyPortal({
               </div>
             </div>
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:6, padding:"5px 11px", borderRadius:99, background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.25)", borderRight:"1px solid rgba(34,197,94,0.25)", borderBottom:"1px solid rgba(34,197,94,0.25)", borderLeft:"1px solid rgba(34,197,94,0.25)" }}>
-                <span style={{ width:6, height:6, borderRadius:"50%", background:"#22c55e", boxShadow:"0 0 6px #22c55e", display:"inline-block", animation:"cpPulse 2.5s ease-in-out infinite" }}/>
-                <span style={{ fontSize:"0.6rem", fontWeight:700, color:"#22c55e", fontFamily:"Poppins, sans-serif" }}>Activo</span>
-              </div>
+              {accessToken && <NotificationsBell accessToken={accessToken} accent="#E53BF6" />}
               {isMobile && (
                 <button onClick={onBack} title="Cerrar sesión" style={{ width:36, height:36, borderRadius:10, background:"rgba(229,59,246,0.08)", border:"1px solid rgba(229,59,246,0.25)", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer" }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" stroke="#E53BF6" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -833,11 +877,11 @@ export default function CompanyPortal({
 
           {/* Content area */}
           <div key={activeTab} className="hide-scroll" style={{ flex:1, overflowY:"auto", padding: isMobile?"16px 14px 84px":"24px 28px 36px" }}>
-            {activeTab==="dashboard"       && <DashboardSection solicitudes={solicitudes} onNavigate={navigate} onToast={showToast}/>}
+            {activeTab==="dashboard"       && <DashboardSection solicitudes={solicitudes} cases={cases} onNavigate={navigate} onToast={showToast}/>}
             {activeTab==="nueva-solicitud" && <NuevaSolicitudSection onSubmit={handleFormSubmit} onCancel={()=>navigate("dashboard")}/>}
             {activeTab==="solicitudes"     && <SolicitudesSection solicitudes={solicitudes} newId={newEntryId} onToast={showToast} onNavigate={navigate}/>}
             {activeTab==="perfil"          && <PerfilSection isMobile={isMobile} onToast={showToast}/>}
-            {activeTab==="evaluaciones"    && <EvaluacionesSection onToast={showToast}/>}
+            {activeTab==="evaluaciones"    && <EvaluacionesSection cases={cases} state={casesState} error={casesError}/>}
             {activeTab==="configuracion"   && <ConfiguracionSection onToast={showToast}/>}
           </div>
         </main>

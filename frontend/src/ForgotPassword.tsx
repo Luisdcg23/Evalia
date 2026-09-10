@@ -531,7 +531,7 @@ export default function ForgotPassword({
                       setIssuedCode(await requestPasswordRecovery(email));
                       setTimeout(() => cellRefs.current[0]?.focus(), 60);
                     }}
-                    style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.75rem", fontFamily: "Poppins, sans-serif", fontWeight: 600, background: "linear-gradient(135deg, #E53BF6, #3BF6E5)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}
+                    style={{ border: "none", cursor: "pointer", fontSize: "0.75rem", fontFamily: "Poppins, sans-serif", fontWeight: 600, background: "linear-gradient(135deg, #E53BF6, #3BF6E5)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", backgroundClip: "text" }}
                   >
                     Reenviar código
                   </button>

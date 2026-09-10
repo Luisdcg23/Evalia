@@ -18,5 +18,7 @@ export async function saveResponse(accessToken: string, response: OutboxResponse
       comments: response.comments,
     }),
   });
-  if (!result.ok) throw new Error("No fue posible guardar la respuesta.");
+  if (!result.ok) throw Object.assign(new Error(result.status === 409
+    ? "La respuesta entra en conflicto con una versión más reciente."
+    : result.status === 401 ? "La sesión expiró." : "No fue posible guardar la respuesta."), { status: result.status });
 }

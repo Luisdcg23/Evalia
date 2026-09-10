@@ -149,8 +149,25 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   Las respuestas de campo siguen bloqueadas desde el envío: una corrección
   corrige el informe, no la evaluación.
 
+- Consultas operativas por identidad autenticada en la interfaz: el panel de
+  cada rol (`GET /api/dashboard`), la bandeja de expedientes y la agenda del
+  técnico (`GET /api/me/cases`, `GET /api/me/schedule`), el listado de técnicos
+  evaluadores con su carga vigente para el coordinador (`GET /api/technicians`)
+  y la consulta histórica de expedientes con filtros de empresa, origen, estado
+  y fecha (`GET /api/cases/history/search`, RF-20). Cada vista distingue de
+  forma explícita los estados de carga, vacío y error.
+- Campana de notificaciones en los paneles de técnico, coordinador, empresa y
+  administración: contador de no leídas, lista desplegable y marcado como leída
+  persistido en el servidor (`GET /api/notifications`,
+  `PATCH /api/notifications/{id}/read`). El estado de lectura vive en el backend;
+  la interfaz solo lo refleja.
+
 ### Cambiado
 
+- Los paneles de técnico evaluador, coordinador y portal de empresa dejan de
+  mostrar datos operativos simulados (evaluaciones, agenda, técnicos,
+  calendario, métricas de tarjetas): ahora consumen la API real con el token de
+  sesión.
 - Las altas de catálogos de riesgo (`/api/catalogs`) quedan enlazadas a una
   versión de reglas: los peligros de subcategoría y las bandas de frecuencia
   entran en la versión publicada vigente y los factores del establecimiento en
