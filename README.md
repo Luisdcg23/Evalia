@@ -12,6 +12,7 @@ Aplicación web local para gestionar evaluaciones basadas en riesgo e inspeccion
 - React 19, TypeScript y Vite
 - Node.js 20, 22 o 24 y pnpm
 - MinIO local para el almacenamiento de evidencias
+- QuestPDF (licencia Community) para el informe oficial en PDF
 - xUnit y Vitest
 
 ## Funcionalidades disponibles

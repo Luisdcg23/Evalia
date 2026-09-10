@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using EBR.Domain.Evaluations;
 using EBR.Domain.Identity;
 using EBR.Infrastructure.Evaluations;
@@ -155,6 +156,386 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         using var versions = await SendAsync(HttpMethod.Get, $"/api/evaluations/{scenario.InstanceId}/report/versions", null, otherToken);
         Assert.Equal(HttpStatusCode.Forbidden, versions.StatusCode);
     }
+
+    [Fact]
+    public async Task IssuingTheReportPutsTheCaseUnderReview()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+
+        await PostJsonAsync<ReportResponse>($"/api/evaluations/{scenario.InstanceId}/report", new
+        {
+            executiveSummary = "Resumen inicial.",
+            findings = "Hallazgos iniciales.",
+            recommendations = "Recomendaciones iniciales."
+        }, scenario.TechnicianToken);
+
+        var inspectionCase = await GetJsonAsync<CaseResponse>($"/api/cases/{scenario.CaseId}", scenario.CoordinatorToken);
+
+        Assert.Equal("IN_REVIEW", inspectionCase.Status);
+    }
+
+    [Fact]
+    public async Task CoordinatorApprovesTheReport()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await IssueReportAsync(scenario, "inicial");
+
+        var review = await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "El informe refleja lo observado en la visita."
+        }, scenario.CoordinatorToken);
+
+        Assert.Equal("APPROVED", review.Decision);
+        Assert.Equal(1, review.ReportVersion);
+
+        var inspectionCase = await GetJsonAsync<CaseResponse>($"/api/cases/{scenario.CaseId}", scenario.CoordinatorToken);
+        Assert.Equal("APPROVED", inspectionCase.Status);
+
+        var current = await GetJsonAsync<ReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report", scenario.CoordinatorToken);
+        Assert.Equal("APPROVED", current.Status);
+    }
+
+    [Fact]
+    public async Task CoordinatorRequestsACorrectionAndTheCaseWaitsForIt()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await IssueReportAsync(scenario, "inicial");
+
+        var review = await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "CORRECTION_REQUESTED",
+            observations = "Falta describir el hallazgo del área de empaque."
+        }, scenario.CoordinatorToken);
+
+        Assert.Equal("CORRECTION_REQUESTED", review.Decision);
+
+        var inspectionCase = await GetJsonAsync<CaseResponse>($"/api/cases/{scenario.CaseId}", scenario.CoordinatorToken);
+        Assert.Equal("CORRECTION_REQUIRED", inspectionCase.Status);
+
+        var current = await GetJsonAsync<ReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report", scenario.CoordinatorToken);
+        Assert.Equal("CORRECTION_REQUESTED", current.Status);
+    }
+
+    [Fact]
+    public async Task ReturningTheReportWithoutObservationsIsRejected()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await IssueReportAsync(scenario, "inicial");
+
+        using var response = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "RETURNED",
+            observations = "   "
+        }, scenario.CoordinatorToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ReturningTheReportWithNullObservationsIsRejectedWithoutServerError()
+    {
+        var scenario = await SubmitEvaluationAsync(1);
+        await IssueReportAsync(scenario, "inicial");
+
+        using var response = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "RETURNED",
+            observations = (string?)null
+        }, scenario.CoordinatorToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ReviewWithAnUnknownDecisionIsRejected()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await IssueReportAsync(scenario, "inicial");
+
+        using var response = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "ARCHIVADO",
+            observations = "Decisión inexistente."
+        }, scenario.CoordinatorToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var current = await GetJsonAsync<ReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report", scenario.CoordinatorToken);
+        Assert.Equal("ISSUED", current.Status);
+    }
+
+    [Fact]
+    public async Task TechnicianReadsTheObservationsOfTheReview()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await IssueReportAsync(scenario, "inicial");
+        await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "CORRECTION_REQUESTED",
+            observations = "Falta describir el hallazgo del área de empaque."
+        }, scenario.CoordinatorToken);
+
+        var reviews = await GetJsonAsync<List<ReviewResponse>>(
+            $"/api/evaluations/{scenario.InstanceId}/report/reviews", scenario.TechnicianToken);
+
+        var review = Assert.Single(reviews);
+        Assert.Equal("CORRECTION_REQUESTED", review.Decision);
+        Assert.Equal("Falta describir el hallazgo del área de empaque.", review.Observations);
+        Assert.Equal(1, review.ReportVersion);
+    }
+
+    [Fact]
+    public async Task ResubmittingAfterACorrectionPutsTheCaseBackUnderReview()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await IssueReportAsync(scenario, "inicial");
+        await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "CORRECTION_REQUESTED",
+            observations = "Falta describir el hallazgo del área de empaque."
+        }, scenario.CoordinatorToken);
+
+        var corrected = await IssueReportAsync(scenario, "corregido");
+
+        Assert.Equal(2, corrected.Version);
+        Assert.Equal("ISSUED", corrected.Status);
+
+        var inspectionCase = await GetJsonAsync<CaseResponse>($"/api/cases/{scenario.CaseId}", scenario.CoordinatorToken);
+        Assert.Equal("IN_REVIEW", inspectionCase.Status);
+    }
+
+    [Fact]
+    public async Task AnApprovedReportDoesNotAdmitANewVersion()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await IssueReportAsync(scenario, "inicial");
+        await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "El informe refleja lo observado en la visita."
+        }, scenario.CoordinatorToken);
+
+        using var response = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report", new
+        {
+            executiveSummary = "Resumen posterior a la aprobación.",
+            findings = "Hallazgos posteriores a la aprobación.",
+            recommendations = "Recomendaciones posteriores a la aprobación."
+        }, scenario.TechnicianToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var current = await GetJsonAsync<ReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report", scenario.CoordinatorToken);
+        Assert.Equal(1, current.Version);
+    }
+
+    [Fact]
+    public async Task TechnicianCannotReviewTheReport()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await IssueReportAsync(scenario, "inicial");
+
+        using var response = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "Autoaprobación indebida."
+        }, scenario.TechnicianToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ReviewingAnAlreadyApprovedReportIsRejected()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await IssueReportAsync(scenario, "inicial");
+        await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "El informe refleja lo observado en la visita."
+        }, scenario.CoordinatorToken);
+
+        using var response = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "CORRECTION_REQUESTED",
+            observations = "Devolución posterior a la aprobación."
+        }, scenario.CoordinatorToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var current = await GetJsonAsync<ReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report", scenario.CoordinatorToken);
+        Assert.Equal("APPROVED", current.Status);
+
+        var reviews = await GetJsonAsync<List<ReviewResponse>>(
+            $"/api/evaluations/{scenario.InstanceId}/report/reviews", scenario.CoordinatorToken);
+        Assert.Single(reviews);
+    }
+
+    [Fact]
+    public async Task ApprovedReportGeneratesAnOfficialPdfWithVerifiableMetadata()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await IssueReportAsync(scenario, "oficial");
+        await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "Informe aprobado para emisión oficial."
+        }, scenario.CoordinatorToken);
+
+        var official = await PostJsonAsync<OfficialReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
+
+        Assert.Equal(scenario.InstanceId, official.EvaluationInstanceId);
+        Assert.Equal(64, official.Sha256.Length);
+        Assert.True(official.SizeBytes > 100);
+
+        using var download = await SendAsync(HttpMethod.Get,
+            $"/api/evaluations/{scenario.InstanceId}/report/official/content", null, scenario.CoordinatorToken);
+        download.EnsureSuccessStatusCode();
+        Assert.Equal("application/pdf", download.Content.Headers.ContentType?.MediaType);
+        var bytes = await download.Content.ReadAsByteArrayAsync();
+        Assert.StartsWith("%PDF-", System.Text.Encoding.ASCII.GetString(bytes));
+        Assert.Equal(official.Sha256, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+        Assert.Equal(official.SizeBytes, bytes.LongLength);
+    }
+
+    [Fact]
+    public async Task OfficialPdfRequiresTheLatestReportToBeApproved()
+    {
+        var scenario = await SubmitEvaluationAsync(1);
+        await IssueReportAsync(scenario, "sin aprobar");
+
+        using var response = await SendAsync(HttpMethod.Post,
+            $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ClosingRequiresOfficialPdfAndIsIdempotent()
+    {
+        var scenario = await SubmitEvaluationAsync(1);
+        await IssueReportAsync(scenario, "cierre");
+        await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "Informe aprobado."
+        }, scenario.CoordinatorToken);
+
+        using (var beforePdf = await SendAsync(HttpMethod.Post, $"/api/cases/{scenario.CaseId}/close",
+                   new { result = "Cierre conforme al informe aprobado." }, scenario.CoordinatorToken))
+            Assert.Equal(HttpStatusCode.Conflict, beforePdf.StatusCode);
+
+        await PostJsonAsync<OfficialReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
+
+        var first = await PostJsonAsync<ClosureResponse>($"/api/cases/{scenario.CaseId}/close",
+            new { result = "Cierre conforme al informe aprobado." }, scenario.CoordinatorToken);
+        var second = await PostJsonAsync<ClosureResponse>($"/api/cases/{scenario.CaseId}/close",
+            new { result = "Cierre conforme al informe aprobado." }, scenario.CoordinatorToken);
+
+        Assert.Equal(first.Id, second.Id);
+        Assert.Equal("CLOSED", first.Status);
+        var inspectionCase = await GetJsonAsync<CaseResponse>($"/api/cases/{scenario.CaseId}", scenario.CoordinatorToken);
+        Assert.Equal("CLOSED", inspectionCase.Status);
+
+        using var scope = _factory.Services.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<EbrDbContext>();
+        Assert.Single(await context.CaseClosures.Where(value => value.CaseId == scenario.CaseId).ToListAsync());
+        Assert.Single(await context.CaseStateHistories.Where(value =>
+            value.CaseId == scenario.CaseId && value.NewStatus == "CLOSED").ToListAsync());
+    }
+
+    [Fact]
+    public async Task DownloadingTheOfficialPdfRequiresAccessToTheCase()
+    {
+        var scenario = await SubmitEvaluationAsync(1);
+        await IssueReportAsync(scenario, "oficial");
+        await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "Informe aprobado para emisión oficial."
+        }, scenario.CoordinatorToken);
+        await PostJsonAsync<OfficialReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
+
+        var otherEmail = $"tecnico-descarga-{Guid.NewGuid():N}@ebr.local";
+        await CreateEvaluatorUserAsync(otherEmail);
+        var otherToken = await LoginAsync(otherEmail);
+
+        using var response = await SendAsync(HttpMethod.Get,
+            $"/api/evaluations/{scenario.InstanceId}/report/official/content", null, otherToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task GeneratingTheOfficialPdfTwiceReturnsTheSameImmutableMetadata()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await IssueReportAsync(scenario, "oficial");
+        await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "Informe aprobado para emisión oficial."
+        }, scenario.CoordinatorToken);
+
+        var first = await PostJsonAsync<OfficialReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
+        var second = await PostJsonAsync<OfficialReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
+
+        Assert.Equal(first.Id, second.Id);
+        Assert.Equal(first.Sha256, second.Sha256);
+        Assert.Equal(first.GeneratedAt, second.GeneratedAt);
+    }
+
+    [Fact]
+    public async Task AClosedCaseDoesNotAdmitANewReportVersionOrReopening()
+    {
+        var scenario = await SubmitEvaluationAsync(1);
+        await IssueReportAsync(scenario, "cierre");
+        await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "Informe aprobado."
+        }, scenario.CoordinatorToken);
+        await PostJsonAsync<OfficialReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
+        await PostJsonAsync<ClosureResponse>($"/api/cases/{scenario.CaseId}/close",
+            new { result = "Cierre conforme al informe aprobado." }, scenario.CoordinatorToken);
+
+        using var newVersion = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report", new
+        {
+            executiveSummary = "Resumen posterior al cierre.",
+            findings = "Hallazgos posteriores al cierre.",
+            recommendations = "Recomendaciones posteriores al cierre."
+        }, scenario.TechnicianToken);
+        Assert.Equal(HttpStatusCode.Conflict, newVersion.StatusCode);
+
+        using var newReview = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "CORRECTION_REQUESTED",
+            observations = "Reapertura indebida."
+        }, scenario.CoordinatorToken);
+        Assert.Equal(HttpStatusCode.Conflict, newReview.StatusCode);
+
+        var inspectionCase = await GetJsonAsync<CaseResponse>($"/api/cases/{scenario.CaseId}", scenario.CoordinatorToken);
+        Assert.Equal("CLOSED", inspectionCase.Status);
+    }
+
+    private async Task<ReportResponse> IssueReportAsync(EvaluationScenario scenario, string label) =>
+        await PostJsonAsync<ReportResponse>($"/api/evaluations/{scenario.InstanceId}/report", new
+        {
+            executiveSummary = $"Resumen {label}.",
+            findings = $"Hallazgos {label}.",
+            recommendations = $"Recomendaciones {label}."
+        }, scenario.TechnicianToken);
 
     private async Task<EvaluationScenario> SubmitEvaluationAsync(int questionCount)
     {
@@ -391,8 +772,20 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
     private sealed record InstanceResponse(int Id, int CaseId, int TemplateId, string Status);
     private sealed record ResponseResponse(int Id, int EvaluationInstanceId, int TemplateItemId, string OptionCode);
 
+    private sealed record ReviewResponse(
+        int Id, int ReportId, int ReportVersion, string Decision, string Observations,
+        DateTimeOffset ReviewedAt, Guid ReviewedBy);
+
     private sealed record ReportResponse(
         int Id, int EvaluationInstanceId, int Version, string Status,
         string ExecutiveSummary, string Findings, string Recommendations,
         DateTimeOffset CreatedAt, Guid CreatedBy);
+
+    private sealed record OfficialReportResponse(
+        int Id, int EvaluationInstanceId, int ReportId, int ReportVersion, string FileName,
+        string MimeType, long SizeBytes, string Sha256, DateTimeOffset GeneratedAt, Guid GeneratedBy);
+
+    private sealed record ClosureResponse(
+        int Id, int CaseId, int ReportId, int OfficialReportId, string Status, string Result,
+        DateTimeOffset ClosedAt, Guid ClosedBy);
 }

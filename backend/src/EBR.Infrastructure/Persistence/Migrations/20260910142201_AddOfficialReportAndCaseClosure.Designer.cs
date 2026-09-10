@@ -3,6 +3,7 @@ using System;
 using EBR.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace EBR.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(EbrDbContext))]
-    partial class EbrDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260910142201_AddOfficialReportAndCaseClosure")]
+    partial class AddOfficialReportAndCaseClosure
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2277,67 +2280,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.ToTable("Programacion_Institucional", (string)null);
                 });
 
-            modelBuilder.Entity("EBR.Domain.Workflow.Notification", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_creacion");
-
-                    b.Property<string>("Message")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("mensaje");
-
-                    b.Property<string>("OperationId")
-                        .HasMaxLength(180)
-                        .HasColumnType("character varying(180)")
-                        .HasColumnName("operacion_id");
-
-                    b.Property<DateTimeOffset?>("ReadAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_lectura");
-
-                    b.Property<Guid>("RecipientId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("destinatario_id");
-
-                    b.Property<int?>("ReferenceId")
-                        .HasColumnType("integer")
-                        .HasColumnName("referencia_id");
-
-                    b.Property<string>("ReferenceType")
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)")
-                        .HasColumnName("tipo_referencia");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasMaxLength(160)
-                        .HasColumnType("character varying(160)")
-                        .HasColumnName("titulo");
-
-                    b.Property<string>("Type")
-                        .IsRequired()
-                        .HasMaxLength(60)
-                        .HasColumnType("character varying(60)")
-                        .HasColumnName("tipo");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OperationId")
-                        .IsUnique();
-
-                    b.HasIndex("RecipientId", "CreatedAt");
-
-                    b.ToTable("Notificacion", (string)null);
-                });
-
             modelBuilder.Entity("EBR.Infrastructure.Identity.ApplicationUser", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3266,15 +3208,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
                         .WithMany()
                         .HasForeignKey("CreatedBy")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Domain.Workflow.Notification", b =>
-                {
-                    b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
-                        .WithMany()
-                        .HasForeignKey("RecipientId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

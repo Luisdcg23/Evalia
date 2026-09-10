@@ -18,6 +18,7 @@
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.14" />
     <PackageReference Include="Minio" Version="7.0.0" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+    <PackageReference Include="QuestPDF" Version="2026.8.0" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.1" />
   </ItemGroup>
 

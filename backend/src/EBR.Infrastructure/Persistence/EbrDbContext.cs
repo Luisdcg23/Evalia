@@ -59,6 +59,10 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
     public DbSet<EvaluationNonConformity> EvaluationNonConformities => Set<EvaluationNonConformity>();
     public DbSet<EvaluationEvidence> EvaluationEvidences => Set<EvaluationEvidence>();
     public DbSet<EvaluationReport> EvaluationReports => Set<EvaluationReport>();
+    public DbSet<EvaluationReportReview> EvaluationReportReviews => Set<EvaluationReportReview>();
+    public DbSet<EvaluationOfficialReport> EvaluationOfficialReports => Set<EvaluationOfficialReport>();
+    public DbSet<CaseClosure> CaseClosures => Set<CaseClosure>();
+    public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<HealthAlert> HealthAlerts => Set<HealthAlert>();
     public DbSet<Complaint> Complaints => Set<Complaint>();
     public DbSet<InstitutionalScheduling> InstitutionalSchedulings => Set<InstitutionalScheduling>();
@@ -695,6 +699,78 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
             entity.Property(item => item.CreatedBy).HasColumnName("emitido_por");
             entity.HasOne<EvaluationInstance>().WithMany().HasForeignKey(item => item.EvaluationInstanceId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<ApplicationUser>().WithMany().HasForeignKey(item => item.CreatedBy).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<EvaluationReportReview>(entity =>
+        {
+            entity.ToTable("Evaluacion_Informe_Revision");
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => item.ReportId);
+            entity.Property(item => item.ReportId).HasColumnName("informe_id");
+            entity.Property(item => item.Decision).HasColumnName("decision").HasMaxLength(30);
+            entity.Property(item => item.Observations).HasColumnName("observaciones").HasColumnType("text");
+            entity.Property(item => item.ReviewedAt).HasColumnName("fecha_revision");
+            entity.Property(item => item.ReviewedBy).HasColumnName("revisado_por");
+            entity.HasOne<EvaluationReport>().WithMany().HasForeignKey(item => item.ReportId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ApplicationUser>().WithMany().HasForeignKey(item => item.ReviewedBy).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<EvaluationOfficialReport>(entity =>
+        {
+            entity.ToTable("Evaluacion_Informe_Oficial", table =>
+            {
+                table.HasCheckConstraint("CK_Evaluacion_Informe_Oficial_Tamano", "tamano_bytes > 0");
+                table.HasCheckConstraint("CK_Evaluacion_Informe_Oficial_Hash", "char_length(hash_sha256) = 64");
+            });
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => item.ReportId).IsUnique();
+            entity.HasIndex(item => item.StorageKey).IsUnique();
+            entity.Property(item => item.ReportId).HasColumnName("informe_id");
+            entity.Property(item => item.FileName).HasColumnName("nombre_archivo").HasMaxLength(260);
+            entity.Property(item => item.MimeType).HasColumnName("tipo_mime").HasMaxLength(120);
+            entity.Property(item => item.SizeBytes).HasColumnName("tamano_bytes");
+            entity.Property(item => item.Sha256).HasColumnName("hash_sha256").HasMaxLength(64);
+            entity.Property(item => item.StorageKey).HasColumnName("clave_objeto").HasMaxLength(500);
+            entity.Property(item => item.GeneratedAt).HasColumnName("fecha_generacion");
+            entity.Property(item => item.GeneratedBy).HasColumnName("generado_por");
+            entity.HasOne<EvaluationReport>().WithMany().HasForeignKey(item => item.ReportId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ApplicationUser>().WithMany().HasForeignKey(item => item.GeneratedBy).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<CaseClosure>(entity =>
+        {
+            entity.ToTable("Caso_Cierre", table => table.HasCheckConstraint("CK_Caso_Cierre_Estado", "estado = 'CLOSED'"));
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => item.CaseId).IsUnique();
+            entity.Property(item => item.CaseId).HasColumnName("caso_id");
+            entity.Property(item => item.ReportId).HasColumnName("informe_id");
+            entity.Property(item => item.OfficialReportId).HasColumnName("informe_oficial_id");
+            entity.Property(item => item.Status).HasColumnName("estado").HasMaxLength(20);
+            entity.Property(item => item.Result).HasColumnName("resultado").HasColumnType("text");
+            entity.Property(item => item.ClosedAt).HasColumnName("fecha_cierre");
+            entity.Property(item => item.ClosedBy).HasColumnName("cerrado_por");
+            entity.HasOne<InspectionCase>().WithMany().HasForeignKey(item => item.CaseId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<EvaluationReport>().WithMany().HasForeignKey(item => item.ReportId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<EvaluationOfficialReport>().WithMany().HasForeignKey(item => item.OfficialReportId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ApplicationUser>().WithMany().HasForeignKey(item => item.ClosedBy).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<Notification>(entity =>
+        {
+            entity.ToTable("Notificacion");
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => new { item.RecipientId, item.CreatedAt });
+            entity.HasIndex(item => item.OperationId).IsUnique();
+            entity.Property(item => item.RecipientId).HasColumnName("destinatario_id");
+            entity.Property(item => item.Type).HasColumnName("tipo").HasMaxLength(60);
+            entity.Property(item => item.Title).HasColumnName("titulo").HasMaxLength(160);
+            entity.Property(item => item.Message).HasColumnName("mensaje").HasColumnType("text");
+            entity.Property(item => item.ReferenceType).HasColumnName("tipo_referencia").HasMaxLength(40);
+            entity.Property(item => item.ReferenceId).HasColumnName("referencia_id");
+            entity.Property(item => item.OperationId).HasColumnName("operacion_id").HasMaxLength(180);
+            entity.Property(item => item.CreatedAt).HasColumnName("fecha_creacion");
+            entity.Property(item => item.ReadAt).HasColumnName("fecha_lectura");
+            entity.HasOne<ApplicationUser>().WithMany().HasForeignKey(item => item.RecipientId).OnDelete(DeleteBehavior.Restrict);
         });
     }
 

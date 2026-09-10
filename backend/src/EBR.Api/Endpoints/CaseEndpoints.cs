@@ -202,6 +202,9 @@ public static class CaseEndpoints
             context.ChangeTracker.Clear();
             var storedAssignment = await context.CaseAssignments.AsNoTracking()
                 .SingleAsync(value => value.CaseId == id && value.IsCurrent, cancellationToken);
+            await AddNotificationAsync(context, technician.Id, NotificationTypes.CaseAssigned,
+                "Nuevo expediente asignado", $"Se le asignó el expediente {id}.", id,
+                $"assignment:{storedAssignment.Id}:{technician.Id}", cancellationToken);
             return Results.Ok(storedAssignment);
         }
 
@@ -258,6 +261,9 @@ public static class CaseEndpoints
         };
         context.CaseAssignments.Add(assignment);
         await context.SaveChangesAsync(cancellationToken);
+        await AddNotificationAsync(context, technician.Id, NotificationTypes.CaseAssigned,
+            "Nuevo expediente asignado", $"Se le asignó el expediente {id}.", id,
+            $"assignment:{assignment.Id}:{technician.Id}", cancellationToken);
         return Results.Ok(assignment);
     }
 
@@ -323,8 +329,12 @@ public static class CaseEndpoints
                 cancellationToken));
             if (problem is not null) return problem;
             context.ChangeTracker.Clear();
-            return Results.Ok(await context.CaseSchedules.AsNoTracking()
-                .SingleAsync(value => value.CaseId == id && value.IsCurrent, cancellationToken));
+            var storedSchedule = await context.CaseSchedules.AsNoTracking()
+                .SingleAsync(value => value.CaseId == id && value.IsCurrent, cancellationToken);
+            await AddNotificationAsync(context, assignment.TechnicianId, NotificationTypes.CaseScheduled,
+                "Evaluación programada", $"El expediente {id} fue programado para {storedSchedule.ScheduledFor:u}.", id,
+                $"schedule:{storedSchedule.Id}:{assignment.TechnicianId}", cancellationToken);
+            return Results.Ok(storedSchedule);
         }
 
         var previousStatus = item.Status;
@@ -353,6 +363,9 @@ public static class CaseEndpoints
         };
         context.CaseSchedules.Add(schedule);
         await context.SaveChangesAsync(cancellationToken);
+        await AddNotificationAsync(context, assignment.TechnicianId, NotificationTypes.CaseScheduled,
+            "Evaluación programada", $"El expediente {id} fue programado para {schedule.ScheduledFor:u}.", id,
+            $"schedule:{schedule.Id}:{assignment.TechnicianId}", cancellationToken);
         return Results.Ok(schedule);
     }
 
@@ -588,6 +601,24 @@ public static class CaseEndpoints
         !string.IsNullOrWhiteSpace(request.Reason) && request.Reason.Length <= 1000 &&
         (request.Priority is null || request.Priority.Length <= 20) &&
         (request.Observations is null || request.Observations.Length <= 2000);
+
+    private static async Task AddNotificationAsync(
+        EbrDbContext context, Guid recipientId, string type, string title, string message,
+        int caseId, string operationId, CancellationToken cancellationToken)
+    {
+        if (await context.Notifications.AnyAsync(x => x.OperationId == operationId, cancellationToken)) return;
+        context.Notifications.Add(new Notification
+        {
+            RecipientId = recipientId,
+            Type = type,
+            Title = title,
+            Message = message,
+            ReferenceType = "CASE",
+            ReferenceId = caseId,
+            OperationId = operationId
+        });
+        await context.SaveChangesAsync(cancellationToken);
+    }
 
     private sealed record TransitionRequest(string NewStatus, string Reason);
     private sealed record InstitutionalCaseRequest(int CompanyId, string Reason, string? Observations = null);

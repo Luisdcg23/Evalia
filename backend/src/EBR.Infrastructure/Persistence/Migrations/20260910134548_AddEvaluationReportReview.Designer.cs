@@ -3,6 +3,7 @@ using System;
 using EBR.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace EBR.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(EbrDbContext))]
-    partial class EbrDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260910134548_AddEvaluationReportReview")]
+    partial class AddEvaluationReportReview
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -212,62 +215,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("Empresa_Usuario", (string)null);
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.CaseClosure", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("CaseId")
-                        .HasColumnType("integer")
-                        .HasColumnName("caso_id");
-
-                    b.Property<DateTimeOffset>("ClosedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_cierre");
-
-                    b.Property<Guid>("ClosedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("cerrado_por");
-
-                    b.Property<int>("OfficialReportId")
-                        .HasColumnType("integer")
-                        .HasColumnName("informe_oficial_id");
-
-                    b.Property<int>("ReportId")
-                        .HasColumnType("integer")
-                        .HasColumnName("informe_id");
-
-                    b.Property<string>("Result")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("resultado");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasColumnName("estado");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CaseId")
-                        .IsUnique();
-
-                    b.HasIndex("ClosedBy");
-
-                    b.HasIndex("OfficialReportId");
-
-                    b.HasIndex("ReportId");
-
-                    b.ToTable("Caso_Cierre", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_Caso_Cierre_Estado", "estado = 'CLOSED'");
-                        });
                 });
 
             modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationEvidence", b =>
@@ -638,72 +585,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.ToTable("Evaluacion_No_Conformidad", null, t =>
                         {
                             t.HasCheckConstraint("CK_Evaluacion_No_Conformidad_Severidad", "severidad IN ('CRITICAL','MAJOR','MINOR')");
-                        });
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationOfficialReport", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("FileName")
-                        .IsRequired()
-                        .HasMaxLength(260)
-                        .HasColumnType("character varying(260)")
-                        .HasColumnName("nombre_archivo");
-
-                    b.Property<DateTimeOffset>("GeneratedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_generacion");
-
-                    b.Property<Guid>("GeneratedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("generado_por");
-
-                    b.Property<string>("MimeType")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)")
-                        .HasColumnName("tipo_mime");
-
-                    b.Property<int>("ReportId")
-                        .HasColumnType("integer")
-                        .HasColumnName("informe_id");
-
-                    b.Property<string>("Sha256")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("hash_sha256");
-
-                    b.Property<long>("SizeBytes")
-                        .HasColumnType("bigint")
-                        .HasColumnName("tamano_bytes");
-
-                    b.Property<string>("StorageKey")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
-                        .HasColumnName("clave_objeto");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("GeneratedBy");
-
-                    b.HasIndex("ReportId")
-                        .IsUnique();
-
-                    b.HasIndex("StorageKey")
-                        .IsUnique();
-
-                    b.ToTable("Evaluacion_Informe_Oficial", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_Evaluacion_Informe_Oficial_Hash", "char_length(hash_sha256) = 64");
-
-                            t.HasCheckConstraint("CK_Evaluacion_Informe_Oficial_Tamano", "tamano_bytes > 0");
                         });
                 });
 
@@ -2277,67 +2158,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.ToTable("Programacion_Institucional", (string)null);
                 });
 
-            modelBuilder.Entity("EBR.Domain.Workflow.Notification", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_creacion");
-
-                    b.Property<string>("Message")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("mensaje");
-
-                    b.Property<string>("OperationId")
-                        .HasMaxLength(180)
-                        .HasColumnType("character varying(180)")
-                        .HasColumnName("operacion_id");
-
-                    b.Property<DateTimeOffset?>("ReadAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_lectura");
-
-                    b.Property<Guid>("RecipientId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("destinatario_id");
-
-                    b.Property<int?>("ReferenceId")
-                        .HasColumnType("integer")
-                        .HasColumnName("referencia_id");
-
-                    b.Property<string>("ReferenceType")
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)")
-                        .HasColumnName("tipo_referencia");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasMaxLength(160)
-                        .HasColumnType("character varying(160)")
-                        .HasColumnName("titulo");
-
-                    b.Property<string>("Type")
-                        .IsRequired()
-                        .HasMaxLength(60)
-                        .HasColumnType("character varying(60)")
-                        .HasColumnName("tipo");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OperationId")
-                        .IsUnique();
-
-                    b.HasIndex("RecipientId", "CreatedAt");
-
-                    b.ToTable("Notificacion", (string)null);
-                });
-
             modelBuilder.Entity("EBR.Infrastructure.Identity.ApplicationUser", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2713,33 +2533,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
-            modelBuilder.Entity("EBR.Domain.Evaluations.CaseClosure", b =>
-                {
-                    b.HasOne("EBR.Domain.Workflow.InspectionCase", null)
-                        .WithMany()
-                        .HasForeignKey("CaseId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
-                        .WithMany()
-                        .HasForeignKey("ClosedBy")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationOfficialReport", null)
-                        .WithMany()
-                        .HasForeignKey("OfficialReportId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationReport", null)
-                        .WithMany()
-                        .HasForeignKey("ReportId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
             modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationEvidence", b =>
                 {
                     b.HasOne("EBR.Domain.Evaluations.EvaluationInstance", null)
@@ -2835,21 +2628,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.HasOne("EBR.Domain.Evaluations.EvaluationGuidanceCriterion", null)
                         .WithMany()
                         .HasForeignKey("GuidanceCriterionId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationOfficialReport", b =>
-                {
-                    b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
-                        .WithMany()
-                        .HasForeignKey("GeneratedBy")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationReport", null)
-                        .WithMany()
-                        .HasForeignKey("ReportId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
@@ -3266,15 +3044,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
                         .WithMany()
                         .HasForeignKey("CreatedBy")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Domain.Workflow.Notification", b =>
-                {
-                    b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
-                        .WithMany()
-                        .HasForeignKey("RecipientId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

@@ -10,8 +10,10 @@ using EBR.Infrastructure.Risk;
 using EBR.Application.Risk;
 using EBR.Application.Evaluations;
 using EBR.Application.Evidence;
+using EBR.Application.Reports;
 using EBR.Infrastructure.Evaluations;
 using EBR.Infrastructure.Evidence;
+using EBR.Infrastructure.Reports;
 
 namespace EBR.Infrastructure;
 
@@ -64,6 +66,10 @@ public static class DependencyInjection
         }
 
         services.AddSingleton<IRiskFormulaService, RiskFormulaService>();
+
+        // Licencia Community de QuestPDF, fijada al arranque para la generación del PDF oficial (RF-19).
+        QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+        services.AddSingleton<IOfficialReportRenderer, OfficialReportRenderer>();
 
         // Almacenamiento de evidencias: la abstracción es la misma para todos los entornos y solo
         // cambia la implementación. Sin extremo de MinIO configurado se usa el sistema de archivos

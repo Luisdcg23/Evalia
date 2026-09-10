@@ -89,6 +89,18 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   (`GET /api/evaluations/{id}/result`). Publicar después otra versión de
   reglas no altera resultados ya registrados, garantizado en la base con el
   disparador `tr_evaluacion_resultado_inmutable`.
+- Revisión transaccional del informe (RF-17 y RF-18) mediante `sp_revisar_informe`, con decisiones
+  versionadas, observaciones de corrección e historial inmutable del expediente.
+- Informe oficial en PDF (RF-19) generado desde la última versión aprobada con resumen ejecutivo,
+  hallazgos, no conformidades por severidad con su criterio de guía, recomendaciones, resultado de
+  cumplimiento BPM y de riesgo, y referencias de las evidencias. La generación es determinista
+  (el mismo informe produce el mismo archivo salvo la fecha de generación) e idempotente; se registra
+  el hash SHA-256 y la fecha de emisión, y el binario se guarda en el almacenamiento de objetos.
+  Descarga autorizada a los roles con acceso al expediente
+  (`POST /api/evaluations/{id}/report/official`, `GET /api/evaluations/{id}/report/official/content`).
+- Cierre transaccional e inmutable del expediente (`POST /api/cases/{id}/close`) mediante
+  `sp_cerrar_expediente`, que exige estado aprobado, informe aprobado y PDF oficial emitido, deja el
+  expediente en `CLOSED` sin reapertura posible y conserva resultado, fecha y usuario.
 
 - Evidencias de la evaluación en campo: subida y descarga autorizadas
   (`POST /api/evaluations/{id}/evidence`, `GET /api/evaluations/{id}/evidence`,
@@ -125,6 +137,17 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   en el informe: se leen del resultado inmutable de la evaluación. Las mismas
   reglas viven en la base (`tr_evaluacion_informe_valido`,
   `tr_evaluacion_informe_inmutable`).
+
+- Revisión del informe por el coordinador y gestión de correcciones
+  (`POST /api/evaluations/{id}/report/review`,
+  `GET /api/evaluations/{id}/report/reviews`). El coordinador aprueba, devuelve o
+  solicita corrección dejando observaciones, y el expediente avanza en
+  consecuencia: emitir el informe lo pone en revisión, devolverlo lo deja en
+  espera de corrección y reenviarlo corregido lo devuelve a revisión. El técnico
+  consulta las observaciones para corregir. Devolver sin observaciones se
+  rechaza, un informe aprobado no admite versión nueva y no se vuelve a revisar.
+  Las respuestas de campo siguen bloqueadas desde el envío: una corrección
+  corrige el informe, no la evaluación.
 
 ### Cambiado
 

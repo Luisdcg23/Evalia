@@ -596,6 +596,104 @@ sin la asignación vigente devuelve `403`. Para leer basta haber tenido el exped
 vez: un técnico reasignado conserva el acceso a lo que él mismo emitió, mientras que un técnico ajeno
 al expediente recibe `403`. Las cuentas de empresa no tienen acceso a estas rutas.
 
+## Revisión del informe y correcciones (RF-17 y RF-18)
+
+`Evaluacion_Informe_Revision` guarda una fila por decisión del coordinador sobre una versión concreta
+del informe: `informe_id`, `decision`, `observaciones`, `fecha_revision` y `revisado_por`. Ninguna
+fila se reemplaza, porque las observaciones son lo que el técnico consulta para corregir y forman
+parte del expediente igual que el informe.
+
+El SRS enumera tres acciones de revisión —aprobar, devolver y solicitar corrección— sin definir en
+qué se diferencian las dos últimas. No se inventa una distinción: se conservan como decisiones
+distintas (`APPROVED`, `RETURNED`, `CORRECTION_REQUESTED`) para registrar la intención del
+coordinador, y tanto `RETURNED` como `CORRECTION_REQUESTED` dejan el expediente en
+`CORRECTION_REQUIRED`, que es el único estado que la máquina contempla para la devolución. El estado
+del informe es la última decisión tomada sobre él; mientras no se revise, es `ISSUED`.
+
+El recorrido sobre el expediente queda así:
+
+| Momento | Estado del expediente |
+|---|---|
+| Envío de la evaluación | `PENDING_REPORT` |
+| Emisión del informe | `IN_REVIEW` |
+| Emisión de otra versión antes de la revisión | sigue `IN_REVIEW` |
+| Devolución o solicitud de corrección | `CORRECTION_REQUIRED` |
+| Reenvío del informe corregido | `IN_REVIEW` |
+| Aprobación | `APPROVED` |
+
+Cada cambio deja su fila en `Caso_Estado_Historial`. Un expediente aprobado o cerrado ya no admite
+versión nueva del informe (`409`), y un informe aprobado no se vuelve a revisar (`409`): lo aprobado
+es lo que se comunicó al establecimiento. Devolver sin observaciones se rechaza con `400`, porque la
+devolución sin indicar qué corregir deja al técnico sin nada que hacer, y una decisión fuera del
+catálogo también se rechaza con `400`.
+
+La restricción de RF-17 —los datos de la evaluación quedan bloqueados después de enviada— es la que
+ya aplica el envío: `Evaluacion_Respuesta` no admite altas ni cambios sobre una instancia enviada, en
+el endpoint y en la base (`tr_evaluacion_respuesta_bloqueada`), y el resultado registrado es
+inmutable. Una corrección, por tanto, corrige el informe, nunca las respuestas de campo.
+
+Disparadores:
+
+- `tr_evaluacion_informe_revision_valida` (BEFORE INSERT) exige que el informe exista, rechaza revisar
+  una versión que no sea la última emitida y exige observaciones cuando la decisión devuelve el
+  informe. El catálogo de decisiones lo impone la restricción
+  `CK_Evaluacion_Informe_Revision_Decision`.
+- `tr_evaluacion_informe_revision_inmutable` (BEFORE UPDATE OR DELETE) rechaza cualquier cambio: la
+  observación que motivó una corrección no se reescribe después.
+
+Rutas y roles:
+
+| Ruta | Método | Rol |
+|---|---|---|
+| `/api/evaluations/{id}/report/review` | POST | Coordinador |
+| `/api/evaluations/{id}/report/reviews` | GET | Técnico asignado, coordinador y administrador |
+
+## Informe oficial en PDF y cierre del expediente (RF-19)
+
+`Evaluacion_Informe_Oficial` guarda los metadatos inmutables del PDF oficial de una versión aprobada
+del informe: `informe_id` (único, una emisión oficial por versión), `nombre_archivo`, `tipo_mime`,
+`tamano_bytes`, `hash_sha256`, `clave_objeto` (único), `fecha_generacion` y `generado_por`. El binario
+del PDF vive en el almacenamiento de objetos (`IEvidenceStorage`, sistema de archivos local o MinIO);
+la base solo conserva la referencia y el hash.
+
+El PDF se compone con QuestPDF (licencia Community, fijada al arranque en
+`AddInfrastructure` y en el constructor estático de `OfficialReportRenderer`). El paquete se añadió a
+`EBR.Infrastructure`; el contrato `IOfficialReportRenderer` vive en `EBR.Application`. El documento se
+arma **solo con datos ya persistidos e inmutables** —el texto de la versión aprobada del informe, la
+fotografía de `Evaluacion_Resultado` (cumplimiento BPM, calificación, puntaje de riesgo, frecuencia y
+conteo de no conformidades por severidad), el detalle de `Evaluacion_No_Conformidad` con el código y
+la descripción de su criterio de guía, y las referencias de `Evaluacion_Evidencia` (nombre, tamaño y
+hash SHA-256)—; el renderizador no calcula nada.
+
+La generación es determinista: los metadatos de fecha del documento se fijan a la fecha de emisión del
+informe, no a la de generación, así que dos emisiones del mismo informe producen bytes idénticos. La
+segunda solicitud de generación devuelve el metadato ya registrado en lugar de rehacer el archivo
+(`200` en vez de `201`). El pie del PDF incrusta además un hash de contenido (SHA-256 sobre la
+serialización canónica de los datos, sin la fecha de generación) que no cambia entre emisiones.
+
+`Caso_Cierre` es el acta inmutable del cierre: `caso_id` (único), `informe_id`, `informe_oficial_id`,
+`estado` (siempre `CLOSED`), `resultado`, `fecha_cierre` y `cerrado_por`. El cierre lo ejecuta
+`sp_cerrar_expediente`, que bloquea el expediente (`FOR UPDATE`), es idempotente (si ya hay acta,
+retorna sin error) y exige estado `APPROVED`, última versión del informe en `APPROVED` y PDF oficial
+asociado; deja el expediente en `CLOSED` y registra la transición en `Caso_Estado_Historial`. Un
+expediente cerrado es terminal: la máquina de estados no admite salir de `CLOSED`, no acepta versión
+nueva del informe (`409`) ni nueva revisión (`409`).
+
+Disparadores:
+
+- `tr_informe_oficial_inmutable` (BEFORE UPDATE OR DELETE sobre `Evaluacion_Informe_Oficial`) y
+  `tr_caso_cierre_inmutable` (BEFORE UPDATE OR DELETE sobre `Caso_Cierre`) rechazan cualquier cambio
+  sobre el registro oficial y el acta de cierre una vez creados, mediante
+  `fn_registro_cierre_inmutable()`.
+
+Rutas y roles:
+
+| Ruta | Método | Rol |
+|---|---|---|
+| `/api/evaluations/{id}/report/official` | POST | Coordinador |
+| `/api/evaluations/{id}/report/official/content` | GET | Técnico asignado, coordinador y administrador |
+| `/api/cases/{id}/close` | POST | Coordinador |
+
 ## Riesgo y frecuencia
 
 Se manejan escalas separadas y versionadas en `Escala_Riesgo` y `Escala_Riesgo_Nivel`:
@@ -787,8 +885,12 @@ Procedimientos transaccionales:
   declarada para esa plantilla y que `NA` solo se use si el ítem lo permite.
 - `sp_enviar_evaluacion(instancia_id, usuario_id)` bloquea la instancia y transiciona el caso a
   `PENDING_REPORT` en una sola transacción, rechazando un segundo envío.
-- `sp_revisar_informe(...)` registra aprobación, devolución o corrección.
-- `sp_cerrar_expediente(...)` comprueba el informe oficial y cierra de forma inmutable.
+- `sp_revisar_informe(instancia_id, decision, observaciones, usuario_id)` bloquea el expediente,
+  valida que esté en revisión y que se actúe sobre su última versión, registra la decisión y su
+  historial y transiciona a `APPROVED` o `CORRECTION_REQUIRED` de forma atómica.
+- `sp_cerrar_expediente(caso_id, resultado, usuario_id)` bloquea el expediente y exige estado
+  `APPROVED`, última versión aprobada y PDF oficial asociado; crea una sola acta de cierre,
+  transiciona a `CLOSED` y registra el historial. Una segunda llamada devuelve el cierre existente.
 
 Disparadores:
 
@@ -824,6 +926,14 @@ Disparadores:
 - `tr_evaluacion_informe_inmutable` sobre `Evaluacion_Informe` impide eliminar una versión emitida y
   reescribir su contenido; una corrección se emite como versión nueva. Usa la función
   `fn_evaluacion_informe_inmutable()`.
+- `tr_evaluacion_informe_revision_valida` sobre `Evaluacion_Informe_Revision` admite revisar
+  únicamente la última versión emitida del informe y exige observaciones en las devoluciones,
+  mediante la función `fn_evaluacion_informe_revision_valida()`.
+- `tr_evaluacion_informe_revision_inmutable` sobre `Evaluacion_Informe_Revision` impide modificar o
+  eliminar una revisión registrada, mediante la función
+  `fn_evaluacion_informe_revision_inmutable()`.
+- `tr_informe_oficial_inmutable` y `tr_caso_cierre_inmutable` impiden modificar o eliminar los
+  metadatos del PDF oficial y el acta de cierre después de registrados.
 
 Los nombres anteriores representan el contrato estable. Su creación se versiona dentro de una migración de EF Core.
 
@@ -848,8 +958,13 @@ reglas de riesgo se incorporaron en `AddEvaluationResult`. La tabla `Evaluacion_
 funciones `fn_evaluacion_evidencia_valida` y `fn_evaluacion_evidencia_inmutable` y sus disparadores
 se incorporaron en `AddEvaluationEvidence`. La tabla `Evaluacion_Informe`, las funciones
 `fn_evaluacion_informe_valido` y `fn_evaluacion_informe_inmutable` y sus disparadores se
-incorporaron en `AddEvaluationReport`. El resto sigue pendiente de las tareas
-correspondientes, incluida
+incorporaron en `AddEvaluationReport`. La tabla `Evaluacion_Informe_Revision`, las funciones
+`fn_evaluacion_informe_revision_valida`, `fn_evaluacion_informe_revision_inmutable`,
+`sp_revisar_informe` y sus disparadores se incorporaron en `AddEvaluationReportReview`. Las tablas
+`Evaluacion_Informe_Oficial` y `Caso_Cierre`, `sp_cerrar_expediente` y los disparadores de
+inmutabilidad se incorporaron en `AddOfficialReportAndCaseClosure`. El PDF se almacena mediante
+`IEvidenceStorage`; PostgreSQL conserva únicamente nombre, tipo MIME, tamaño, hash SHA-256, clave,
+fecha y usuario. Sigue pendiente
 `fn_catalogo_opciones`: los catálogos generales descritos arriba se resuelven hoy con consultas EF
 equivalentes porque las pruebas de integración corren sobre el proveedor en memoria, que no ejecuta
 funciones de PostgreSQL.
