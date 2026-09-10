@@ -711,9 +711,30 @@ disparador, sin recalcular nada:
   riesgo BPM, la frecuencia de inspección en meses y el nivel de riesgo (`Nivel_Riesgo.nombre` del
   `Calculo_Riesgo` asociado al resultado).
 
-No se agregó tabla ni migración: `HistoryAsync` (en `OperationalReadEndpoints.cs`) resuelve estos
-datos con consultas de lectura sobre `Evaluacion_Instancia`, `Evaluacion_Resultado`, `Calculo_Riesgo`,
-`Nivel_Riesgo`, `Evaluacion_Informe` y `Evaluacion_Informe_Oficial`.
+La consulta histórica en sí no agregó tabla: `HistoryAsync` (en `OperationalReadEndpoints.cs`)
+resuelve estos datos con consultas de lectura sobre `Evaluacion_Instancia`, `Evaluacion_Resultado`,
+`Calculo_Riesgo`, `Nivel_Riesgo`, `Evaluacion_Informe` y `Evaluacion_Informe_Oficial`.
+
+### Notificaciones
+
+La migración `AddOperationalReadsAndNotifications` incorpora la tabla `Notificacion`:
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | `integer` identidad | Clave primaria. |
+| `destinatario_id` | `uuid` | FK a `AspNetUsers`; el usuario que recibe la notificación. |
+| `tipo` | `varchar(60)` | Código del evento que la origina. |
+| `titulo` | `varchar(160)` | Texto corto para la lista. |
+| `mensaje` | `text` | Detalle. |
+| `tipo_referencia` / `referencia_id` | `varchar(40)` / `integer` | Enlace opcional a la entidad relacionada (por ejemplo, un expediente). |
+| `operacion_id` | `varchar(180)` | Clave de idempotencia: evita duplicar la misma notificación ante reintentos. |
+| `fecha_creacion` | `timestamptz` | Alta. |
+| `fecha_lectura` | `timestamptz` nullable | `NULL` mientras no se lee; se fija con `PATCH /api/notifications/{id}/read`. |
+
+Índices: `(destinatario_id, fecha_creacion)` para la bandeja del usuario y `operacion_id` para la
+resolución idempotente. El estado de lectura vive solo en la base; la interfaz lo refleja y no lo
+almacena. No requiere rutinas: el alta y el marcado se resuelven con consultas simples en
+`OperationalReadEndpoints.cs`.
 
 ## Riesgo y frecuencia
 
@@ -985,21 +1006,134 @@ incorporaron en `AddEvaluationReport`. La tabla `Evaluacion_Informe_Revision`, l
 `Evaluacion_Informe_Oficial` y `Caso_Cierre`, `sp_cerrar_expediente` y los disparadores de
 inmutabilidad se incorporaron en `AddOfficialReportAndCaseClosure`. El PDF se almacena mediante
 `IEvidenceStorage`; PostgreSQL conserva únicamente nombre, tipo MIME, tamaño, hash SHA-256, clave,
-fecha y usuario. Sigue pendiente
+fecha y usuario. La tabla `Notificacion` se incorporó en `AddOperationalReadsAndNotifications`, que
+no crea rutinas: es la vigésima y última migración. Sigue pendiente
 `fn_catalogo_opciones`: los catálogos generales descritos arriba se resuelven hoy con consultas EF
 equivalentes porque las pruebas de integración corren sobre el proveedor en memoria, que no ejecuta
 funciones de PostgreSQL.
 
 ## Instalación y actualización
 
+El esquema se aplica siempre con migraciones de EF Core, nunca con SQL manual fuera de migraciones.
+
 ```powershell
+# Aplicar todas las migraciones pendientes sobre la base configurada en .env
 dotnet ef database update `
   --project "backend\src\EBR.Infrastructure\EBR.Infrastructure.csproj" `
   --startup-project "backend\src\EBR.Api\EBR.Api.csproj"
 ```
 
-No se deben crear tablas manualmente en pgAdmin. pgAdmin se utiliza para inspeccionar el resultado de las migraciones, ejecutar consultas de diagnóstico y visualizar el diagrama E/R.
+Las 20 migraciones aplican limpio sobre una base vacía y dejan 54 tablas, 27 rutinas `sp_`/`fn_` y
+21 disparadores. Comprobación del estado:
 
-## Respaldo y portabilidad
+```powershell
+# Migraciones registradas frente a las presentes en el ensamblado
+dotnet ef migrations list `
+  --project "backend\src\EBR.Infrastructure\EBR.Infrastructure.csproj" `
+  --startup-project "backend\src\EBR.Api\EBR.Api.csproj"
+```
 
-La aplicación no depende de rutas locales. La cadena de conexión y secretos se suministran mediante variables de entorno. Un entorno nuevo se reconstruye con el código, las migraciones y los seeds versionados. Los respaldos se generan con `pg_dump` y se restauran con `pg_restore` en una versión compatible de PostgreSQL.
+Para revertir a una migración concreta se indica su nombre como destino (`dotnet ef database update
+<NombreMigracion>`); revertir a `0` vacía el esquema. No se deben crear ni alterar tablas
+manualmente en pgAdmin: pgAdmin se utiliza para inspeccionar el resultado de las migraciones,
+ejecutar consultas de diagnóstico y visualizar el diagrama E/R.
+
+Tras aplicar las migraciones, la base tiene el esquema y —en entorno `Development`— las cuentas de
+demostración y la empresa de ejemplo (`DevelopmentDataSeeder`, que corre al arrancar la API). La
+matriz de riesgo de alimentos y la plantilla BPM **no** se cargan automáticamente; ver "Importación
+y calidad de datos".
+
+## Diagnóstico
+
+Consultas de verificación sobre la base ya migrada (ejecutar con `psql` o pgAdmin):
+
+```sql
+-- Rutinas creadas por las migraciones (se esperan 27 entre funciones y procedimientos)
+SELECT n.nspname AS esquema, p.proname AS rutina,
+       CASE p.prokind WHEN 'f' THEN 'función' WHEN 'p' THEN 'procedimiento' END AS tipo
+FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE p.proname LIKE 'sp\_%' OR p.proname LIKE 'fn\_%'
+ORDER BY p.proname;
+
+-- Disparadores de inmutabilidad e integridad (se esperan 21)
+SELECT c.relname AS tabla, t.tgname AS disparador
+FROM pg_trigger t
+JOIN pg_class c ON c.oid = t.tgrelid
+WHERE NOT t.tgisinternal AND t.tgname LIKE 'tr\_%'
+ORDER BY c.relname, t.tgname;
+
+-- Conteo de tablas del esquema public (se esperan 54)
+SELECT count(*) FROM information_schema.tables
+WHERE table_schema = 'public' AND table_type = 'BASE TABLE';
+
+-- Última migración aplicada
+SELECT "MigrationId" FROM "__EFMigrationsHistory" ORDER BY "MigrationId" DESC LIMIT 1;
+
+-- ¿Hay una versión de reglas de riesgo publicada y vigente? (necesaria para calcular riesgo)
+SELECT id, version, publicado, activo, vigente_desde, vigente_hasta
+FROM "Version_Regla_Riesgo" ORDER BY version DESC;
+
+-- ¿Está publicada la plantilla BPM? (necesaria para iniciar evaluaciones)
+SELECT id, nombre, estado, fecha_publicacion FROM "Plantilla_Evaluacion";
+```
+
+Salud de la API y de la conexión a la base:
+
+```text
+GET http://localhost:5080/health            -> estado de la API
+GET http://localhost:5080/health/database   -> PostgresHealthCheck (SELECT 1 contra la base)
+```
+
+Errores frecuentes:
+
+- `relation "..." does not exist` al arrancar la API: faltan migraciones; ejecutar `dotnet ef
+  database update`.
+- Una evaluación no puede iniciarse o el cálculo de riesgo se rechaza: falta sembrar la plantilla
+  BPM o la versión de reglas de riesgo (ver "Importación y calidad de datos").
+- `28P01` / autenticación rechazada: revisar `ConnectionStrings__EbrDatabase` en `.env`.
+
+## Respaldo y restauración
+
+La aplicación no depende de rutas locales: la cadena de conexión y los secretos se suministran por
+variables de entorno, y un entorno nuevo se reconstruye con el código, las migraciones y los seeds
+versionados. Los binarios de evidencias e informes oficiales viven fuera de la base (MinIO o
+`storage/`), así que un respaldo completo incluye la base **y** ese almacén de objetos.
+
+Respaldo de la base (formato comprimido, recomendado):
+
+```powershell
+pg_dump --format=custom --no-owner --no-privileges `
+  --dbname "postgresql://postgres:CONTRASENA@localhost:5432/ebr_bpm" `
+  --file "ebr_bpm_$(Get-Date -Format yyyyMMdd_HHmm).dump"
+```
+
+Restauración sobre una base vacía:
+
+```powershell
+# 1. Crear la base destino
+psql -U postgres -h localhost -c "CREATE DATABASE ebr_bpm_restore;"
+
+# 2. Restaurar
+pg_restore --no-owner --no-privileges --clean --if-exists `
+  --dbname "postgresql://postgres:CONTRASENA@localhost:5432/ebr_bpm_restore" `
+  "ebr_bpm_20260910_1200.dump"
+```
+
+Alternativa en SQL plano (portátil entre versiones mayores de PostgreSQL):
+
+```powershell
+pg_dump --no-owner --no-privileges --dbname ebr_bpm --file ebr_bpm.sql
+psql -U postgres -h localhost -d ebr_bpm_restore -f ebr_bpm.sql
+```
+
+Notas:
+
+- Usar una versión de `pg_restore`/`psql` igual o superior a la de origen. PostgreSQL 18 es la
+  versión de referencia del proyecto.
+- El volcado en formato `custom` conserva las rutinas `sp_`/`fn_` y los disparadores; no hace falta
+  volver a ejecutar migraciones sobre una base restaurada.
+- Si solo se necesita mover datos de referencia a otra base ya migrada, restaurar con
+  `--data-only --disable-triggers` para no chocar con los disparadores de inmutabilidad.
+- Tras restaurar, verificar con las consultas de la sección "Diagnóstico" y con
+  `GET /health/database`.

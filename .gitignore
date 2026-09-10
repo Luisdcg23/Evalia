@@ -16,6 +16,13 @@ logs/
 *.log
 .tmp-*
 .run/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+playwright/.cache/
 storage/data/
 storage/evidencias/
 storage/minio/minio.exe
+**/storage/evidencias/
+**/storage/data/
