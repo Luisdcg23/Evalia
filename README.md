@@ -27,14 +27,22 @@ Aplicación web local para gestionar evaluaciones basadas en riesgo e inspeccion
 - Solicitudes BPM en borrador y envío.
 - Creación idempotente de expedientes e historial de estados.
 - Registro y decisión de alertas LAPCH y denuncias.
+- Asignación y reasignación de técnico evaluador con historial completo.
+- Programación, reprogramación, cancelación y agenda de evaluaciones.
+- Ejecución de la evaluación en campo con autosave por pregunta y envío que la
+  bloquea de forma inmutable.
+- Cálculo del porcentaje BPM, no conformidades por severidad y riesgo integrado
+  con la versión de reglas congelada en la evaluación.
+- Evidencias de la evaluación con subida y descarga autorizadas.
+- Instalación como PWA y cola local de respuestas en IndexedDB con
+  sincronización idempotente al recuperar la red.
 
 ## Pendiente de implementación
 
 - Completar edición de todos los datos ampliados de empresas y catálogos.
-- Asignación y reasignación histórica de técnicos.
-- Programación, reprogramación, cancelación y calendario de evaluaciones.
-- Ejecución completa de evaluaciones, respuestas, calificación y autosave.
-- Funcionamiento PWA offline, outbox y sincronización idempotente.
+- Conectar la pantalla del técnico con la captura real: la cola sin conexión y el
+  cliente de respuestas están disponibles, pero las evaluaciones que se listan en
+  esa pantalla siguen siendo datos simulados.
 - Informes PDF, revisión del coordinador, correcciones y cierre inmutable.
 - Notificaciones, dashboards con métricas reales y consulta histórica completa.
 - Sustituir los datos simulados que permanecen en algunas pantallas.

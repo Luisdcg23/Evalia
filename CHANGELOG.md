@@ -103,6 +103,17 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   Coordinador y Administrador. Los metadatos son inmutables
   (`tr_evaluacion_evidencia_valida`, `tr_evaluacion_evidencia_inmutable`).
 
+- Captura en campo sin conexión: la aplicación se instala como PWA (manifiesto y
+  trabajador de servicio con el armazón en caché) y las respuestas capturadas se
+  guardan en una cola local en IndexedDB cuando la API no responde. La cola se
+  vacía al recuperar la red y la sincronización es idempotente por partida
+  doble: la clave de cada entrada es la pregunta —evaluación e ítem—, de modo
+  que reguardar reemplaza lo pendiente en lugar de acumular envíos, y la API
+  resuelve cada respuesta como alta o actualización sobre ese mismo par. Solo se
+  admite una sincronización en curso, y un envío fallido conserva la respuesta
+  para el siguiente intento. El trabajador de servicio no almacena nada de
+  `/api`: los datos del expediente se consultan siempre contra el servidor.
+
 ### Cambiado
 
 - Las altas de catálogos de riesgo (`/api/catalogs`) quedan enlazadas a una

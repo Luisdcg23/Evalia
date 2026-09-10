@@ -1,0 +1,16 @@
+{
+  "name": "Evalia — Evaluación Basada en Riesgo",
+  "short_name": "Evalia",
+  "description": "Evaluaciones basadas en riesgo e inspecciones BPM, con captura en campo sin conexión.",
+  "lang": "es",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    { "src": "/icono-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icono-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
