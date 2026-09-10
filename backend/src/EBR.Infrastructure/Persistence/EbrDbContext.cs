@@ -58,6 +58,7 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
     public DbSet<EvaluationResult> EvaluationResults => Set<EvaluationResult>();
     public DbSet<EvaluationNonConformity> EvaluationNonConformities => Set<EvaluationNonConformity>();
     public DbSet<EvaluationEvidence> EvaluationEvidences => Set<EvaluationEvidence>();
+    public DbSet<EvaluationReport> EvaluationReports => Set<EvaluationReport>();
     public DbSet<HealthAlert> HealthAlerts => Set<HealthAlert>();
     public DbSet<Complaint> Complaints => Set<Complaint>();
     public DbSet<InstitutionalScheduling> InstitutionalSchedulings => Set<InstitutionalScheduling>();
@@ -677,6 +678,23 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
             entity.HasOne<EvaluationInstance>().WithMany().HasForeignKey(item => item.EvaluationInstanceId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<EvaluationResponse>().WithMany().HasForeignKey(item => item.EvaluationResponseId).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<ApplicationUser>().WithMany().HasForeignKey(item => item.UploadedBy).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        builder.Entity<EvaluationReport>(entity =>
+        {
+            entity.ToTable("Evaluacion_Informe");
+            entity.HasKey(item => item.Id);
+            entity.HasIndex(item => new { item.EvaluationInstanceId, item.Version }).IsUnique();
+            entity.Property(item => item.EvaluationInstanceId).HasColumnName("instancia_id");
+            entity.Property(item => item.Version).HasColumnName("version");
+            entity.Property(item => item.Status).HasColumnName("estado").HasMaxLength(20);
+            entity.Property(item => item.ExecutiveSummary).HasColumnName("resumen_ejecutivo").HasColumnType("text");
+            entity.Property(item => item.Findings).HasColumnName("hallazgos").HasColumnType("text");
+            entity.Property(item => item.Recommendations).HasColumnName("recomendaciones").HasColumnType("text");
+            entity.Property(item => item.CreatedAt).HasColumnName("fecha_emision");
+            entity.Property(item => item.CreatedBy).HasColumnName("emitido_por");
+            entity.HasOne<EvaluationInstance>().WithMany().HasForeignKey(item => item.EvaluationInstanceId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ApplicationUser>().WithMany().HasForeignKey(item => item.CreatedBy).OnDelete(DeleteBehavior.Restrict);
         });
     }
 

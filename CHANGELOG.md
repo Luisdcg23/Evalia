@@ -114,6 +114,18 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   para el siguiente intento. El trabajador de servicio no almacena nada de
   `/api`: los datos del expediente se consultan siempre contra el servidor.
 
+- Informe de la evaluación versionado (`POST /api/evaluations/{id}/report`,
+  `GET /api/evaluations/{id}/report`, `GET /api/evaluations/{id}/report/versions`).
+  Emitirlo de nuevo tras una corrección crea la versión siguiente y conserva
+  intactas las anteriores: el informe es lo que se comunica al establecimiento y
+  una corrección no puede borrar lo ya emitido. Solo lo emite el técnico con la
+  asignación vigente del expediente y solo sobre una evaluación ya enviada;
+  Coordinador y Administrador consultan cualquier informe y el técnico únicamente
+  el de los expedientes que ha tenido asignados. Las cifras del BPM no se copian
+  en el informe: se leen del resultado inmutable de la evaluación. Las mismas
+  reglas viven en la base (`tr_evaluacion_informe_valido`,
+  `tr_evaluacion_informe_inmutable`).
+
 ### Cambiado
 
 - Las altas de catálogos de riesgo (`/api/catalogs`) quedan enlazadas a una

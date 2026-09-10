@@ -559,6 +559,43 @@ por configuración: MinIO local cuando `Minio__Endpoint` tiene valor y el sistem
 `evaluaciones/{instancia}/{identificador}{extensión}`, generada por el servidor, de modo que el
 nombre original del archivo nunca determina la ruta de escritura.
 
+## Informe de la evaluación (RF-16)
+
+`Evaluacion_Informe` guarda el texto del informe —`resumen_ejecutivo`, `hallazgos` y
+`recomendaciones`— junto a `instancia_id`, `version`, `estado`, `fecha_emision` y `emitido_por`. Las
+cifras del BPM (porcentaje, calificación, no conformidades) **no se copian aquí**: viven en
+`Evaluacion_Resultado`, que ya es inmutable, así que cada lectura del informe las reproduce desde su
+única fuente y no pueden divergir.
+
+El informe se versiona. Emitirlo de nuevo tras una corrección inserta la versión siguiente y
+conserva intactas las anteriores, porque el informe es lo que se comunica al establecimiento y una
+corrección no puede borrar lo ya emitido. El índice único sobre `(instancia_id, version)` impide
+duplicar una versión, y `tr_evaluacion_informe_valido` exige que la versión insertada sea
+exactamente la última más uno, de modo que el historial no tenga huecos aunque la fila se inserte
+directamente por SQL.
+
+Disparadores:
+
+- `tr_evaluacion_informe_valido` (BEFORE INSERT) rechaza emitir sobre una instancia inexistente o que
+  todavía no está en `SUBMITTED`, y exige la versión consecutiva.
+- `tr_evaluacion_informe_inmutable` (BEFORE UPDATE OR DELETE) rechaza eliminar una versión y rechaza
+  cambiar su contenido, la instancia, la versión, la fecha o el autor. `estado` queda fuera del
+  bloqueo porque el recorrido de revisión del informe avanza sobre la misma fila.
+
+Rutas y roles:
+
+| Ruta | Método | Rol |
+|---|---|---|
+| `/api/evaluations/{id}/report` | POST | Técnico evaluador con la asignación vigente, con la evaluación ya enviada |
+| `/api/evaluations/{id}/report` | GET | Técnico asignado, coordinador y administrador |
+| `/api/evaluations/{id}/report/versions` | GET | Técnico asignado, coordinador y administrador |
+
+`GET /api/evaluations/{id}/report` devuelve la versión vigente, que es siempre la última emitida, y
+`404` mientras no exista ninguna. Emitir sobre una evaluación aún en captura devuelve `409` y hacerlo
+sin la asignación vigente devuelve `403`. Para leer basta haber tenido el expediente asignado alguna
+vez: un técnico reasignado conserva el acceso a lo que él mismo emitió, mientras que un técnico ajeno
+al expediente recibe `403`. Las cuentas de empresa no tienen acceso a estas rutas.
+
 ## Riesgo y frecuencia
 
 Se manejan escalas separadas y versionadas en `Escala_Riesgo` y `Escala_Riesgo_Nivel`:
@@ -781,6 +818,12 @@ Disparadores:
   `fn_evaluacion_evidencia_valida()`.
 - `tr_evaluacion_evidencia_inmutable` sobre `Evaluacion_Evidencia` impide modificar o eliminar el
   metadato de una evidencia registrada, mediante la función `fn_evaluacion_evidencia_inmutable()`.
+- `tr_evaluacion_informe_valido` sobre `Evaluacion_Informe` admite emitir únicamente sobre una
+  evaluación ya enviada y con la versión consecutiva, mediante la función
+  `fn_evaluacion_informe_valido()`.
+- `tr_evaluacion_informe_inmutable` sobre `Evaluacion_Informe` impide eliminar una versión emitida y
+  reescribir su contenido; una corrección se emite como versión nueva. Usa la función
+  `fn_evaluacion_informe_inmutable()`.
 
 Los nombres anteriores representan el contrato estable. Su creación se versiona dentro de una migración de EF Core.
 
@@ -803,7 +846,9 @@ tablas `Evaluacion_Resultado` y `Evaluacion_No_Conformidad`, el disparador
 `tr_evaluacion_resultado_inmutable` y la versión de `sp_iniciar_evaluacion` que congela la versión de
 reglas de riesgo se incorporaron en `AddEvaluationResult`. La tabla `Evaluacion_Evidencia`, las
 funciones `fn_evaluacion_evidencia_valida` y `fn_evaluacion_evidencia_inmutable` y sus disparadores
-se incorporaron en `AddEvaluationEvidence`. El resto sigue pendiente de las tareas
+se incorporaron en `AddEvaluationEvidence`. La tabla `Evaluacion_Informe`, las funciones
+`fn_evaluacion_informe_valido` y `fn_evaluacion_informe_inmutable` y sus disparadores se
+incorporaron en `AddEvaluationReport`. El resto sigue pendiente de las tareas
 correspondientes, incluida
 `fn_catalogo_opciones`: los catálogos generales descritos arriba se resuelven hoy con consultas EF
 equivalentes porque las pruebas de integración corren sobre el proveedor en memoria, que no ejecuta
