@@ -3,6 +3,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EBR.Domain.Companies;
+using EBR.Domain.Evaluations;
+using EBR.Domain.RiskCatalogs;
 using EBR.Domain.Workflow;
 using EBR.Infrastructure.Identity;
 using EBR.Infrastructure.Persistence;
@@ -105,6 +107,95 @@ public sealed class OperationalReadEndpointTests : IClassFixture<EbrApiFactory>
         using var second = await SendAsync(HttpMethod.Patch, $"/api/notifications/{id}/read", technicianToken);
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
         Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+    }
+
+    [Fact]
+    public async Task HistorySearchIncludesOfficialReportAndEvaluationQualification()
+    {
+        var token = await LoginAsync("coordinador@ebr.local");
+        int caseId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<EbrDbContext>();
+            var companyId = await db.Companies.Select(x => x.Id).FirstAsync();
+            var actor = await UserIdAsync("coordinador@ebr.local");
+
+            var inspectionCase = NewCase(companyId, actor, CaseStatuses.Approved);
+            db.InspectionCases.Add(inspectionCase);
+            await db.SaveChangesAsync();
+            caseId = inspectionCase.Id;
+
+            db.CaseStateHistories.Add(new CaseStateHistory
+            {
+                CaseId = caseId, PreviousStatus = CaseStatuses.InReview, NewStatus = CaseStatuses.Approved,
+                Reason = "Informe aprobado", ChangedBy = actor
+            });
+
+            var riskLevel = new RiskLevel { Name = "Alto", Points = 3 };
+            db.RiskLevels.Add(riskLevel);
+            await db.SaveChangesAsync();
+
+            var calculation = new RiskCalculation
+            {
+                CompanyId = companyId, CalculatedAt = DateTimeOffset.UtcNow, ProductRisk = 8m,
+                EstablishmentRisk = 1m, TotalRisk = 8m, RiskLevelId = riskLevel.Id,
+                InspectionFrequencyMatrixId = 1, FactorDetailsJson = "{}", GeneratedBy = actor
+            };
+            db.RiskCalculations.Add(calculation);
+
+            var instance = new EvaluationInstance
+            {
+                CaseId = caseId, TemplateId = 1, RiskRuleVersionId = 1,
+                Status = EvaluationInstanceStatuses.Submitted, StartedBy = actor,
+                SubmittedAt = DateTimeOffset.UtcNow, SubmittedBy = actor
+            };
+            db.EvaluationInstances.Add(instance);
+            await db.SaveChangesAsync();
+
+            db.EvaluationResults.Add(new EvaluationResult
+            {
+                EvaluationInstanceId = instance.Id, BpmPoints = 40m, BpmDenominator = 45m,
+                BpmPercentage = 88.9m, QualificationCode = "BC", Classification = "Buenas condiciones",
+                BpmRiskScore = 1m, CriticalCount = 0, MajorCount = 1, MinorCount = 2,
+                RiskCalculationId = calculation.Id, FrequencyMonths = 3
+            });
+
+            var report = new EvaluationReport
+            {
+                EvaluationInstanceId = instance.Id, Version = 1, Status = EvaluationReportStatuses.Issued,
+                ExecutiveSummary = "Resumen", Findings = "Hallazgos", Recommendations = "Recomendaciones",
+                CreatedBy = actor
+            };
+            db.EvaluationReports.Add(report);
+            await db.SaveChangesAsync();
+
+            db.EvaluationOfficialReports.Add(new EvaluationOfficialReport
+            {
+                ReportId = report.Id, FileName = "informe-oficial.pdf", SizeBytes = 2048,
+                Sha256 = new string('a', 64), StorageKey = $"informes/{caseId}/oficial.pdf",
+                GeneratedAt = DateTimeOffset.UtcNow, GeneratedBy = actor
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var page = await GetAsync<JsonElement>($"/api/cases/history/search?companyId={await CompanyIdAsync()}", token);
+        var entry = page.GetProperty("items").EnumerateArray()
+            .First(x => x.GetProperty("caseId").GetInt32() == caseId);
+
+        Assert.True(entry.GetProperty("hasOfficialReport").GetBoolean());
+        Assert.Equal(new string('a', 64), entry.GetProperty("officialReport").GetProperty("sha256").GetString());
+        var evaluation = entry.GetProperty("evaluation");
+        Assert.Equal("Buenas condiciones", evaluation.GetProperty("classification").GetString());
+        Assert.Equal("Alto", evaluation.GetProperty("riskLevel").GetString());
+        Assert.Equal(3, evaluation.GetProperty("frequencyMonths").GetInt32());
+        Assert.Equal(88.9m, evaluation.GetProperty("bpmPercentage").GetDecimal());
+    }
+
+    private async Task<int> CompanyIdAsync()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<EbrDbContext>();
+        return await db.Companies.Select(x => x.Id).FirstAsync();
     }
 
     [Fact]

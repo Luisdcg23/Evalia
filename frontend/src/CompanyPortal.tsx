@@ -1,5 +1,8 @@
 import { useState, useEffect } from "react";
-import { listCompanies } from "./features/companies/api";
+import {
+  listCompanies, getCompany, listRepresentatives, updateCompany,
+  type Company, type CompanyRepresentative,
+} from "./features/companies/api";
 import { createAndSubmitRequest, listBpmRequests, type BpmRequest, type BpmRequestDocumentInput } from "./features/requests/api";
 import { createDocumentMetadata } from "./features/documents/metadata";
 import { listMyCases, type MyCaseRow } from "./features/operations/api";
@@ -27,21 +30,6 @@ interface Solicitud {
   observaciones?: string;
   document?: BpmRequestDocumentInput;
 }
-
-/* ── Data ───────────────────────────────────────────────────── */
-const COMPANY_DATA = {
-  rnc:        "1-31-01234-5",
-  razonSocial:"Constructora García & Asociados, S.A.",
-  comercial:  "García Constructores",
-  actividad:  "Construcción y Obras Civiles",
-  provincia:  "Santo Domingo",
-  municipio:  "Distrito Nacional",
-  telefono:   "+1 (809) 555-0192",
-  correo:     "operaciones@garcia-const.com.do",
-  repLegal:   { nombre: "Francisco García Pérez",   cedula:   "001-1234567-8"  },
-  repCalidad: { nombre: "Mariela Torres Rodríguez", telefono: "+1 809 555-0208" },
-  repContacto:{ nombre: "Luis Mendoza Castillo",    correo:   "l.mendoza@garcia-const.com.do" },
-};
 
 function toSolicitud(request: BpmRequest): Solicitud {
   return {
@@ -194,9 +182,10 @@ function SolicitudCard({ sol, onToast, isNew }: { sol:Solicitud; onToast:(m:stri
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Dashboard Empresa ──────────────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function DashboardSection({ solicitudes, cases, onNavigate, onToast }: {
+function DashboardSection({ solicitudes, cases, company, onNavigate, onToast }: {
   solicitudes: Solicitud[];
   cases: MyCaseRow[];
+  company: Company | null;
   onNavigate: (t:Tab) => void;
   onToast: (m:string) => void;
 }) {
@@ -211,7 +200,7 @@ function DashboardSection({ solicitudes, cases, onNavigate, onToast }: {
       {/* Welcome */}
       <div>
         <p style={{ fontSize:"0.6rem", fontWeight:700, color:"rgba(229,59,246,0.5)", letterSpacing:"0.14em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif", marginBottom:6 }}>EVALIA · PORTAL EMPRESA</p>
-        <h1 style={{ fontSize:"1.4rem", fontWeight:800, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", letterSpacing:"-0.02em", marginBottom:4 }}>{greeting}, García Constructores</h1>
+        <h1 style={{ fontSize:"1.4rem", fontWeight:800, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", letterSpacing:"-0.02em", marginBottom:4 }}>{greeting}, {company?.tradeName ?? "tu empresa"}</h1>
         <p style={{ fontSize:"0.78rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>Gestiona tus solicitudes BPM y evaluaciones desde aquí.</p>
       </div>
 
@@ -295,7 +284,8 @@ function DashboardSection({ solicitudes, cases, onNavigate, onToast }: {
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Nueva Solicitud BPM (form) ─────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function NuevaSolicitudSection({ onSubmit, onCancel }: {
+function NuevaSolicitudSection({ company, onSubmit, onCancel }: {
+  company: Company | null;
   onSubmit: (sol: Solicitud) => void;
   onCancel: () => void;
 }) {
@@ -366,10 +356,10 @@ function NuevaSolicitudSection({ onSubmit, onCancel }: {
           {/* Empresa — auto-filled */}
           <div>
             <p style={{ fontSize:"0.58rem", fontWeight:700, color:"rgba(148,163,184,0.3)", textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"Poppins, sans-serif", marginBottom:8 }}>DATOS DE LA EMPRESA</p>
-            <FloatInput id="empresa" label="Empresa" value={COMPANY_DATA.razonSocial} onChange={()=>{}} readOnly />
+            <FloatInput id="empresa" label="Empresa" value={company?.legalName ?? ""} onChange={()=>{}} readOnly />
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(180px, 1fr))", gap:12, marginTop:12 }}>
-              <FloatInput id="rnc-form" label="RNC" value={COMPANY_DATA.rnc} onChange={()=>{}} readOnly mono />
-              <FloatInput id="actividad-form" label="Actividad" value={COMPANY_DATA.actividad} onChange={()=>{}} readOnly />
+              <FloatInput id="rnc-form" label="RNC" value={company?.rnc ?? ""} onChange={()=>{}} readOnly mono />
+              <FloatInput id="actividad-form" label="Actividad" value={company?.economicActivity ?? ""} onChange={()=>{}} readOnly />
             </div>
           </div>
 
@@ -515,38 +505,86 @@ function SolicitudesSection({ solicitudes, newId, onToast, onNavigate }: {
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Perfil ──────────────────────────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function PerfilSection({ isMobile, onToast }: { isMobile:boolean; onToast:(m:string)=>void }) {
-  const [rnc,       setRnc]       = useState(COMPANY_DATA.rnc);
-  const [razon,     setRazon]     = useState(COMPANY_DATA.razonSocial);
-  const [comercial, setComercial] = useState(COMPANY_DATA.comercial);
-  const [actividad, setActividad] = useState(COMPANY_DATA.actividad);
-  const [provincia, setProvincia] = useState(COMPANY_DATA.provincia);
-  const [municipio, setMunicipio] = useState(COMPANY_DATA.municipio);
-  const [telefono,  setTelefono]  = useState(COMPANY_DATA.telefono);
-  const [correo,    setCorreo]    = useState(COMPANY_DATA.correo);
-  const [repLName,  setRepLName]  = useState(COMPANY_DATA.repLegal.nombre);
-  const [repLCed,   setRepLCed]   = useState(COMPANY_DATA.repLegal.cedula);
-  const [repCName,  setRepCName]  = useState(COMPANY_DATA.repCalidad.nombre);
-  const [repCTel,   setRepCTel]   = useState(COMPANY_DATA.repCalidad.telefono);
-  const [repKName,  setRepKName]  = useState(COMPANY_DATA.repContacto.nombre);
-  const [repKMail,  setRepKMail]  = useState(COMPANY_DATA.repContacto.correo);
+const REP_TYPE_LABEL: Record<string, { label: string; accent: string }> = {
+  LEGAL: { label: "Representante Legal", accent: "#E53BF6" },
+  CALIDAD: { label: "Rep. Calidad", accent: "#F6E53B" },
+  CONTACTO_PRINCIPAL: { label: "Contacto Principal", accent: "#3BF6E5" },
+};
+
+function PerfilSection({ isMobile, onToast, accessToken, companyId }: {
+  isMobile:boolean; onToast:(m:string)=>void; accessToken:string; companyId:number|null;
+}) {
+  const [state, setState] = useState<"loading" | "loaded" | "empty" | "error">("loading");
+  const [error, setError] = useState("");
+  const [rnc,       setRnc]       = useState("");
+  const [razon,     setRazon]     = useState("");
+  const [comercial, setComercial] = useState("");
+  const [actividad, setActividad] = useState("");
+  const [direccion, setDireccion] = useState("");
+  const [provincia, setProvincia] = useState("");
+  const [municipio, setMunicipio] = useState("");
+  const [telefono,  setTelefono]  = useState("");
+  const [correo,    setCorreo]    = useState("");
+  const [versionToken, setVersionToken] = useState("");
+  const [representatives, setRepresentatives] = useState<CompanyRepresentative[]>([]);
   const [saving,    setSaving]    = useState(false);
   const [saved,     setSaved]     = useState(false);
 
-  const handleSave = () => {
-    setSaving(true); setSaved(false);
-    setTimeout(()=>{ setSaving(false); setSaved(true); onToast("Cambios guardados correctamente"); setTimeout(()=>setSaved(false),2500); },1600);
+  const applyCompany = (company: Company) => {
+    setRnc(company.rnc);
+    setRazon(company.legalName);
+    setComercial(company.tradeName);
+    setActividad(company.economicActivity ?? "");
+    setDireccion(company.address ?? "");
+    setProvincia(company.province ?? "");
+    setMunicipio(company.municipality ?? "");
+    setTelefono(company.phoneNumber ?? "");
+    setCorreo(company.email ?? "");
+    setVersionToken(company.versionToken ?? "");
   };
 
-  const RepCard = ({ role, accent, nameVal, nameSet, fieldLabel, fieldVal, fieldSet }: { role:string; accent:string; nameVal:string; nameSet:(v:string)=>void; fieldLabel:string; fieldVal:string; fieldSet:(v:string)=>void }) => (
-    <div style={{ borderRadius:14, padding:"14px 14px 12px", background:"rgba(12,20,40,0.7)", backdropFilter:"blur(16px)", WebkitBackdropFilter:"blur(16px)", borderTop:`1px solid rgba(255,255,255,0.07)`, borderRight:`1px solid rgba(255,255,255,0.05)`, borderBottom:`1px solid rgba(255,255,255,0.05)`, borderLeft:`3px solid ${accent}66` }}>
-      <p style={{ fontSize:"0.6rem", fontWeight:700, color:accent, fontFamily:"Poppins, sans-serif", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:10 }}>{role}</p>
-      <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
-        <FloatInput id={`${role}-name`} label="Nombre completo" value={nameVal} onChange={nameSet} />
-        <FloatInput id={`${role}-field`} label={fieldLabel} value={fieldVal} onChange={fieldSet} />
-      </div>
-    </div>
-  );
+  const load = () => {
+    if (companyId === null) { setState("empty"); return; }
+    setState("loading");
+    setError("");
+    void Promise.all([
+      getCompany(accessToken, companyId),
+      listRepresentatives(accessToken, companyId).catch(() => [] as CompanyRepresentative[]),
+    ])
+      .then(([company, reps]) => {
+        applyCompany(company);
+        setRepresentatives(reps);
+        setState("loaded");
+      })
+      .catch(loadError => {
+        setError(loadError instanceof Error ? loadError.message : "No fue posible cargar el perfil.");
+        setState("error");
+      });
+  };
+
+  useEffect(load, [accessToken, companyId]);
+
+  const handleSave = async () => {
+    if (companyId === null) return;
+    setSaving(true); setSaved(false); setError("");
+    try {
+      const updated = await updateCompany(accessToken, companyId, {
+        legalName: razon, tradeName: comercial, address: direccion, municipality: municipio,
+        province: provincia, phoneNumber: telefono, email: correo, economicActivity: actividad,
+        versionToken,
+      });
+      applyCompany(updated);
+      setSaving(false); setSaved(true);
+      onToast("Perfil de empresa actualizado");
+      setTimeout(() => setSaved(false), 2500);
+    } catch (saveError) {
+      setSaving(false);
+      const message = saveError instanceof Error ? saveError.message : "No fue posible guardar el perfil.";
+      setError(message);
+      onToast(message);
+      if (message.includes("modificada por otra persona")) load();
+    }
+  };
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16, maxWidth:820 }}>
@@ -554,15 +592,28 @@ function PerfilSection({ isMobile, onToast }: { isMobile:boolean; onToast:(m:str
         <p style={{ fontSize:"0.56rem", fontWeight:700, color:"rgba(229,59,246,0.5)", letterSpacing:"0.14em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif", marginBottom:4 }}>EVALIA · PORTAL EMPRESA</p>
         <h2 style={{ fontSize:"1.1rem", fontWeight:800, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", letterSpacing:"-0.02em" }}>Perfil de Empresa</h2>
       </div>
+
+      {state === "loading" && <p style={{ color:"#94a3b8", fontSize:"0.8rem", fontFamily:"Poppins, sans-serif" }}>Cargando el perfil de la empresa…</p>}
+      {state === "empty" && <p style={{ color:"rgba(148,163,184,0.55)", fontSize:"0.8rem", fontFamily:"Poppins, sans-serif" }}>Tu usuario no tiene una empresa vinculada.</p>}
+      {state === "error" && (
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          <p role="alert" style={{ color:"#fb7185", fontSize:"0.8rem", fontFamily:"Poppins, sans-serif" }}>{error}</p>
+          <button onClick={load} style={{ alignSelf:"flex-start", padding:"8px 16px", borderRadius:10, cursor:"pointer", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", color:"rgba(148,163,184,0.7)", fontFamily:"Poppins, sans-serif", fontSize:"0.75rem", fontWeight:600 }}>Reintentar</button>
+        </div>
+      )}
+
+      {state === "loaded" && <>
+      {error && <p role="alert" style={{ color:"#fb7185", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>{error}</p>}
       <div style={{ borderRadius:20, overflow:"hidden", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(32px) saturate(160%)", WebkitBackdropFilter:"blur(32px) saturate(160%)", borderTop:"1px solid rgba(59,246,229,0.18)", borderRight:"1px solid rgba(255,255,255,0.06)", borderBottom:"1px solid rgba(255,255,255,0.06)", borderLeft:"1px solid rgba(255,255,255,0.06)" }}>
         <div style={{ height:2.5, background:"linear-gradient(90deg,#3BF6E5,#8b5cf6,#E53BF6)" }} />
         <div style={{ padding: isMobile?"18px 16px":"24px 26px" }}>
           <p style={{ fontSize:"0.58rem", fontWeight:700, color:"rgba(148,163,184,0.3)", letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif", marginBottom:14 }}>DATOS DEL ESTABLECIMIENTO</p>
           <div style={{ display:"grid", gridTemplateColumns: isMobile?"1fr":"1fr 1fr", gap:12 }}>
-            <div style={{ gridColumn: isMobile?"1":"1/-1" }}><FloatInput id="rnc-p" label="RNC" value={rnc} onChange={setRnc} readOnly mono /></div>
+            <div style={{ gridColumn: isMobile?"1":"1/-1" }}><FloatInput id="rnc-p" label="RNC" value={rnc} onChange={()=>{}} readOnly mono /></div>
             <FloatInput id="razon-p" label="Razón Social" value={razon} onChange={setRazon} />
             <FloatInput id="comercial-p" label="Nombre Comercial" value={comercial} onChange={setComercial} />
             <div style={{ gridColumn: isMobile?"1":"1/-1" }}><FloatInput id="actividad-p" label="Actividad Económica" value={actividad} onChange={setActividad} /></div>
+            <div style={{ gridColumn: isMobile?"1":"1/-1" }}><FloatInput id="direccion-p" label="Dirección" value={direccion} onChange={setDireccion} /></div>
             <FloatInput id="provincia-p" label="Provincia" value={provincia} onChange={setProvincia} />
             <FloatInput id="municipio-p" label="Municipio" value={municipio} onChange={setMunicipio} />
             <FloatInput id="telefono-p" label="Teléfono" value={telefono} onChange={setTelefono} />
@@ -574,17 +625,31 @@ function PerfilSection({ isMobile, onToast }: { isMobile:boolean; onToast:(m:str
         <div style={{ height:2.5, background:"linear-gradient(90deg,#E53BF6,#8b5cf6,#3BF6E5)" }} />
         <div style={{ padding: isMobile?"18px 16px":"24px 26px" }}>
           <p style={{ fontSize:"0.58rem", fontWeight:700, color:"rgba(148,163,184,0.3)", letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif", marginBottom:14 }}>REPRESENTANTES</p>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(220px, 1fr))", gap:12 }}>
-            <RepCard role="Representante Legal" accent="#E53BF6" nameVal={repLName} nameSet={setRepLName} fieldLabel="Cédula" fieldVal={repLCed} fieldSet={setRepLCed} />
-            <RepCard role="Rep. Calidad" accent="#F6E53B" nameVal={repCName} nameSet={setRepCName} fieldLabel="Teléfono" fieldVal={repCTel} fieldSet={setRepCTel} />
-            <RepCard role="Contacto Principal" accent="#3BF6E5" nameVal={repKName} nameSet={setRepKName} fieldLabel="Correo" fieldVal={repKMail} fieldSet={setRepKMail} />
-          </div>
+          {representatives.length === 0
+            ? <p style={{ fontSize:"0.75rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>Esta empresa todavía no tiene representantes registrados.</p>
+            : (
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(220px, 1fr))", gap:12 }}>
+                {representatives.map(rep => {
+                  const meta = REP_TYPE_LABEL[rep.representativeType] ?? { label: rep.representativeType, accent: "#94a3b8" };
+                  return (
+                    <div key={rep.id} style={{ borderRadius:14, padding:"14px 14px 12px", background:"rgba(12,20,40,0.7)", backdropFilter:"blur(16px)", WebkitBackdropFilter:"blur(16px)", borderTop:"1px solid rgba(255,255,255,0.07)", borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:`3px solid ${meta.accent}66` }}>
+                      <p style={{ fontSize:"0.6rem", fontWeight:700, color:meta.accent, fontFamily:"Poppins, sans-serif", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:8 }}>{meta.label}</p>
+                      <p style={{ fontSize:"0.82rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{rep.fullName}</p>
+                      <p style={{ fontSize:"0.66rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif", marginTop:2 }}>Doc. {rep.documentNumber}</p>
+                      <p style={{ fontSize:"0.66rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>{rep.email}</p>
+                      <p style={{ fontSize:"0.66rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>{rep.phoneNumber}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
         </div>
       </div>
       <button onClick={handleSave} disabled={saving} style={{ width:"100%", height:52, borderRadius:14, border:"none", cursor:saving?"not-allowed":"pointer", fontWeight:800, fontSize:"0.95rem", fontFamily:"Poppins, sans-serif", background: saved?"rgba(34,197,94,0.12)":"linear-gradient(135deg,#3BF6E5,#06b6d4,#8b5cf6)", color: saved?"#22c55e":"#0F172A", boxShadow: saved?"0 8px 24px rgba(34,197,94,0.2)":"0 8px 28px rgba(59,246,229,0.3)", borderTop: saved?"1px solid rgba(34,197,94,0.35)":"none", borderRight: saved?"1px solid rgba(34,197,94,0.35)":"none", borderBottom: saved?"1px solid rgba(34,197,94,0.35)":"none", borderLeft: saved?"1px solid rgba(34,197,94,0.35)":"none", display:"flex", alignItems:"center", justifyContent:"center", gap:10, transition:"all 0.25s ease" }}>
         {saving ? <><span style={{ width:16,height:16,borderRadius:"50%",borderTop:"2px solid #0F172A",borderRight:"2px solid rgba(0,0,0,0.2)",borderBottom:"2px solid rgba(0,0,0,0.2)",borderLeft:"2px solid rgba(0,0,0,0.2)",animation:"cpSpin 0.7s linear infinite",display:"inline-block" }}/>Guardando…</>
         : saved ? <>✓ Cambios guardados</> : <>Guardar Cambios</>}
       </button>
+      </>}
     </div>
   );
 }
@@ -651,10 +716,10 @@ function EvaluacionesSection({ cases, state, error }: { cases: MyCaseRow[]; stat
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Configuración ───────────────────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function ConfiguracionSection({ onToast }: { onToast:(m:string)=>void }) {
-  const [nombre,   setNombre]   = useState("Gerencia García");
-  const [correo,   setCorreo]   = useState("gerencia@empresa.com");
-  const [telefono, setTelefono] = useState(COMPANY_DATA.telefono);
+function ConfiguracionSection({ userName, onToast }: { userName:string; onToast:(m:string)=>void }) {
+  const [nombre,   setNombre]   = useState(userName);
+  const [correo,   setCorreo]   = useState("");
+  const [telefono, setTelefono] = useState("");
   const [n1,setN1]=useState(true); const [n2,setN2]=useState(true); const [n3,setN3]=useState(false);
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:14, maxWidth:660 }}>
@@ -714,7 +779,8 @@ export default function CompanyPortal({
   const [activeTab,   setActiveTab]   = useState<Tab>("dashboard");
   const [navOpen,     setNavOpen]     = useState(false);
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
-  const [companyId, setCompanyId] = useState<number | null>(null);
+  const [company, setCompany] = useState<Company | null>(null);
+  const companyId = company?.id ?? null;
   const [newEntryId,  setNewEntryId]  = useState<string|null>(null);
   const [toast,       setToast]       = useState<string|null>(null);
   const [cases,       setCases]       = useState<MyCaseRow[]>([]);
@@ -726,7 +792,7 @@ export default function CompanyPortal({
   useEffect(() => {
     void Promise.all([listCompanies(accessToken), listBpmRequests(accessToken)])
       .then(([companies, requests]) => {
-        setCompanyId(companies[0]?.id ?? null);
+        setCompany(companies[0] ?? null);
         setSolicitudes(requests.map(toSolicitud));
       })
       .catch(error => showToast(error instanceof Error ? error.message : "No fue posible cargar el portal."));
@@ -801,10 +867,10 @@ export default function CompanyPortal({
           {/* Company avatar */}
           <div style={{ padding: expanded?"22px 18px 16px":"20px 0 14px", display:"flex", alignItems:"center", gap:11, justifyContent: expanded?"flex-start":"center", borderBottom:"1px solid rgba(255,255,255,0.06)", flexShrink:0 }}>
             <div style={{ width:38, height:38, borderRadius:11, flexShrink:0, background:"linear-gradient(135deg,rgba(229,59,246,0.3),rgba(59,246,229,0.3))", borderTop:"1.5px solid rgba(229,59,246,0.5)", borderRight:"1.5px solid rgba(59,246,229,0.4)", borderBottom:"1.5px solid rgba(59,246,229,0.4)", borderLeft:"1.5px solid rgba(229,59,246,0.5)", display:"flex", alignItems:"center", justifyContent:"center" }}>
-              <span style={{ fontSize:"0.8rem", fontWeight:800, background:"linear-gradient(135deg,#E53BF6,#3BF6E5)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", backgroundClip:"text" }}>GC</span>
+              <span style={{ fontSize:"0.8rem", fontWeight:800, background:"linear-gradient(135deg,#E53BF6,#3BF6E5)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", backgroundClip:"text" }}>{(company?.tradeName ?? "?").slice(0,2).toUpperCase()}</span>
             </div>
             {expanded && <div style={{ minWidth:0 }}>
-              <p style={{ fontSize:"0.8rem", fontWeight:700, color:"#f1f5f9", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>García Constructores</p>
+              <p style={{ fontSize:"0.8rem", fontWeight:700, color:"#f1f5f9", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{company?.tradeName ?? "Portal Empresa"}</p>
               <p style={{ fontSize:"0.52rem", color:"rgba(148,163,184,0.3)", letterSpacing:"0.07em", textTransform:"uppercase" }}>Admin de Empresa</p>
             </div>}
           </div>
@@ -877,12 +943,12 @@ export default function CompanyPortal({
 
           {/* Content area */}
           <div key={activeTab} className="hide-scroll" style={{ flex:1, overflowY:"auto", padding: isMobile?"16px 14px 84px":"24px 28px 36px" }}>
-            {activeTab==="dashboard"       && <DashboardSection solicitudes={solicitudes} cases={cases} onNavigate={navigate} onToast={showToast}/>}
-            {activeTab==="nueva-solicitud" && <NuevaSolicitudSection onSubmit={handleFormSubmit} onCancel={()=>navigate("dashboard")}/>}
+            {activeTab==="dashboard"       && <DashboardSection solicitudes={solicitudes} cases={cases} company={company} onNavigate={navigate} onToast={showToast}/>}
+            {activeTab==="nueva-solicitud" && <NuevaSolicitudSection company={company} onSubmit={handleFormSubmit} onCancel={()=>navigate("dashboard")}/>}
             {activeTab==="solicitudes"     && <SolicitudesSection solicitudes={solicitudes} newId={newEntryId} onToast={showToast} onNavigate={navigate}/>}
-            {activeTab==="perfil"          && <PerfilSection isMobile={isMobile} onToast={showToast}/>}
+            {activeTab==="perfil"          && <PerfilSection isMobile={isMobile} onToast={showToast} accessToken={accessToken} companyId={companyId}/>}
             {activeTab==="evaluaciones"    && <EvaluacionesSection cases={cases} state={casesState} error={casesError}/>}
-            {activeTab==="configuracion"   && <ConfiguracionSection onToast={showToast}/>}
+            {activeTab==="configuracion"   && <ConfiguracionSection userName={userName} onToast={showToast}/>}
           </div>
         </main>
 

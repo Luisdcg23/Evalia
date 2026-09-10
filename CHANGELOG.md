@@ -156,6 +156,12 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   y la consulta histórica de expedientes con filtros de empresa, origen, estado
   y fecha (`GET /api/cases/history/search`, RF-20). Cada vista distingue de
   forma explícita los estados de carga, vacío y error.
+- La consulta histórica de expedientes (RF-20) incorpora, por cada expediente
+  del resultado, el informe oficial emitido (fecha de generación y hash
+  SHA-256) y la calificación registrada de la evaluación (porcentaje BPM,
+  clasificación de la ficha, nivel de riesgo y frecuencia de inspección). Es
+  información de solo lectura sobre tablas ya inmutables; el panel de consulta
+  histórica muestra ambas columnas.
 - Campana de notificaciones en los paneles de técnico, coordinador, empresa y
   administración: contador de no leídas, lista desplegable y marcado como leída
   persistido en el servidor (`GET /api/notifications`,
@@ -164,10 +170,24 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
 
 ### Cambiado
 
-- Los paneles de técnico evaluador, coordinador y portal de empresa dejan de
-  mostrar datos operativos simulados (evaluaciones, agenda, técnicos,
-  calendario, métricas de tarjetas): ahora consumen la API real con el token de
+- Los paneles de técnico evaluador, coordinador, portal de empresa y
+  administración del sistema dejan de mostrar datos operativos simulados
+  (evaluaciones, agenda, técnicos, calendario, alertas, denuncias, solicitudes
+  de registro, métricas de tarjetas): ahora consumen la API real con el token de
   sesión.
+- El perfil de empresa del portal (`PerfilSection`) carga los datos reales de la
+  empresa (`GET /api/companies/{id}`) y sus representantes tipados
+  (`GET /api/companies/{id}/representatives`), y guarda los cambios con
+  `PUT /api/companies/{id}` respetando el control de concurrencia optimista
+  (recarga y avisa ante un conflicto `409`).
+- La confirmación de asignación de técnico del panel del coordinador llama a
+  `POST /api/cases/{id}/assign` y refresca la lista de expedientes y las
+  métricas tras asignar, en lugar de solo actualizar el estado local.
+- El panel de administración deriva sus métricas y anillos de progreso de
+  `GET /api/dashboard` y `GET /api/cases`. Las series históricas agregadas por
+  mes y el repositorio de informes descargables a nivel de administración se
+  documentan como no disponibles: el backend no expone hoy un endpoint de
+  agregación histórica ni un catálogo de informes de administración.
 - Las altas de catálogos de riesgo (`/api/catalogs`) quedan enlazadas a una
   versión de reglas: los peligros de subcategoría y las bandas de frecuencia
   entran en la versión publicada vigente y los factores del establecimiento en

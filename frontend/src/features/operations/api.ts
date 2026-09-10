@@ -92,6 +92,24 @@ export interface CaseHistoryFilters {
   pageSize?: number;
 }
 
+/** Metadatos del informe oficial emitido para el expediente (RF-19), si existe. */
+export interface CaseHistoryOfficialReport {
+  generatedAt: string;
+  sha256: string;
+  fileName: string;
+  sizeBytes: number;
+}
+
+/** Calificación registrada de la evaluación del expediente (RF-14), si existe. */
+export interface CaseHistoryEvaluation {
+  bpmPercentage: number;
+  qualificationCode: string;
+  classification: string;
+  bpmRiskScore: number;
+  riskLevel: string;
+  frequencyMonths: number;
+}
+
 export interface CaseHistoryEntry {
   id: number;
   caseId: number;
@@ -102,6 +120,9 @@ export interface CaseHistoryEntry {
   reason: string | null;
   changedAt: string;
   changedBy: string | null;
+  hasOfficialReport: boolean;
+  officialReport: CaseHistoryOfficialReport | null;
+  evaluation: CaseHistoryEvaluation | null;
 }
 
 export interface CaseHistoryPage {

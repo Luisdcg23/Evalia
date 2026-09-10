@@ -132,11 +132,84 @@ public static class OperationalReadEndpoints
         if (technicianId.HasValue)
             query = query.Where(x => db.CaseAssignments.Any(a => a.CaseId == x.Case.Id && a.TechnicianId == technicianId));
         var total = await query.CountAsync(ct);
-        var items = await query.OrderByDescending(x => x.History.ChangedAt)
+        var rows = await query.OrderByDescending(x => x.History.ChangedAt)
             .Skip((requestedPage - 1) * requestedPageSize).Take(requestedPageSize)
             .Select(x => new { x.History.Id, x.History.CaseId, x.Case.CompanyId, x.Case.SourceType,
                 x.History.PreviousStatus, x.History.NewStatus, x.History.Reason,
                 x.History.ChangedAt, x.History.ChangedBy }).ToListAsync(ct);
+
+        // RF-20: cada expediente del resultado se acompaña de su calificación (Evaluacion_Resultado,
+        // si existe) y del informe oficial emitido (Evaluacion_Informe_Oficial, si existe). Es todo
+        // lectura sobre tablas ya inmutables; no se recalcula nada.
+        var caseIds = rows.Select(x => x.CaseId).Distinct().ToArray();
+        var instances = await db.EvaluationInstances.AsNoTracking()
+            .Where(x => caseIds.Contains(x.CaseId))
+            .Select(x => new { x.Id, x.CaseId })
+            .ToListAsync(ct);
+        var instanceByCase = instances.ToDictionary(x => x.CaseId, x => x.Id);
+        var instanceIds = instances.Select(x => x.Id).ToArray();
+
+        var results = await (from result in db.EvaluationResults.AsNoTracking()
+                             where instanceIds.Contains(result.EvaluationInstanceId)
+                             join calculation in db.RiskCalculations.AsNoTracking()
+                                 on result.RiskCalculationId equals calculation.Id
+                             join level in db.RiskLevels.AsNoTracking()
+                                 on calculation.RiskLevelId equals level.Id
+                             select new
+                             {
+                                 result.EvaluationInstanceId,
+                                 result.BpmPercentage,
+                                 result.QualificationCode,
+                                 result.Classification,
+                                 result.BpmRiskScore,
+                                 result.FrequencyMonths,
+                                 RiskLevel = level.Name
+                             }).ToListAsync(ct);
+        var resultByInstance = results.ToDictionary(x => x.EvaluationInstanceId);
+
+        var officialReports = await (from report in db.EvaluationReports.AsNoTracking()
+                                     where instanceIds.Contains(report.EvaluationInstanceId)
+                                     join official in db.EvaluationOfficialReports.AsNoTracking()
+                                         on report.Id equals official.ReportId
+                                     select new
+                                     {
+                                         report.EvaluationInstanceId,
+                                         official.GeneratedAt,
+                                         official.Sha256,
+                                         official.FileName,
+                                         official.SizeBytes
+                                     }).ToListAsync(ct);
+        var officialByInstance = officialReports
+            .GroupBy(x => x.EvaluationInstanceId)
+            .ToDictionary(group => group.Key, group => group.OrderByDescending(x => x.GeneratedAt).First());
+
+        var items = rows.Select(x =>
+        {
+            instanceByCase.TryGetValue(x.CaseId, out var instanceId);
+            var hasInstance = instanceByCase.ContainsKey(x.CaseId);
+            var evaluation = hasInstance && resultByInstance.TryGetValue(instanceId, out var result)
+                ? new
+                {
+                    result.BpmPercentage,
+                    result.QualificationCode,
+                    result.Classification,
+                    result.BpmRiskScore,
+                    result.RiskLevel,
+                    result.FrequencyMonths
+                }
+                : null;
+            var officialReport = hasInstance && officialByInstance.TryGetValue(instanceId, out var official)
+                ? new { official.GeneratedAt, official.Sha256, official.FileName, official.SizeBytes }
+                : null;
+            return new
+            {
+                x.Id, x.CaseId, x.CompanyId, x.SourceType,
+                x.PreviousStatus, x.NewStatus, x.Reason, x.ChangedAt, x.ChangedBy,
+                HasOfficialReport = officialReport is not null,
+                OfficialReport = officialReport,
+                Evaluation = evaluation
+            };
+        }).ToList();
         return Results.Ok(new { page = requestedPage, pageSize = requestedPageSize, total, items });
     }
 

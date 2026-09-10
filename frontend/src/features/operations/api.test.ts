@@ -61,6 +61,29 @@ it("builds the historical search query from the provided filters", async () => {
   expect(url).toContain("page=2");
 });
 
+it("exposes the official report and evaluation qualification of each history row (RF-20)", async () => {
+  const page = {
+    page: 1, pageSize: 50, total: 1,
+    items: [{
+      id: 9, caseId: 4, companyId: 3, sourceType: "BPM_REQUEST",
+      previousStatus: "IN_REVIEW", newStatus: "APPROVED", reason: "ok",
+      changedAt: "2026-09-01T00:00:00Z", changedBy: "u",
+      hasOfficialReport: true,
+      officialReport: { generatedAt: "2026-09-02T00:00:00Z", sha256: "a".repeat(64), fileName: "of.pdf", sizeBytes: 2048 },
+      evaluation: { bpmPercentage: 88.9, qualificationCode: "BC", classification: "Buenas condiciones", bpmRiskScore: 1, riskLevel: "Alto", frequencyMonths: 3 },
+    }],
+  };
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => page });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const result = await searchCaseHistory("token", { companyId: 3 });
+
+  expect(result.items[0].hasOfficialReport).toBe(true);
+  expect(result.items[0].officialReport?.sha256).toHaveLength(64);
+  expect(result.items[0].evaluation?.classification).toBe("Buenas condiciones");
+  expect(result.items[0].evaluation?.riskLevel).toBe("Alto");
+});
+
 it("surfaces a role message when the history search is forbidden", async () => {
   const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}) });
   vi.stubGlobal("fetch", fetchMock);

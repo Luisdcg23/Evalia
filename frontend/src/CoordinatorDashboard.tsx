@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { listAlerts, type HealthAlert } from "./features/alerts/api";
 import { listComplaints, type Complaint } from "./features/complaints/api";
 import { listCompanies, type Company } from "./features/companies/api";
-import { listCases, listSchedule, type ScheduleEntry } from "./features/cases/api";
+import { assignTechnician, listCases, listSchedule, type ScheduleEntry } from "./features/cases/api";
 import { getDashboard, listTechnicians, type DashboardMetrics } from "./features/operations/api";
 import NotificationsBell from "./features/notifications/NotificationsBell";
 import CaseHistoryPanel from "./features/history/CaseHistoryPanel";
@@ -120,6 +120,24 @@ const CASE_STATUS_LABEL: Record<string, EvalStatus> = {
   CANCELLED: "Pendiente",
 };
 const caseStatusLabel = (status: string): EvalStatus => CASE_STATUS_LABEL[status] ?? "Pendiente";
+
+const SOURCE_LABEL: Record<string,string> = {
+  BPM_REQUEST: "Solicitud BPM", HEALTH_ALERT: "Alerta LAPCH",
+  COMPLAINT: "Denuncia", INSTITUTIONAL: "Programación institucional",
+};
+
+function toCaso(item: { id:number; companyId:number; sourceType:string; sourceReferenceId:number; status:string; createdAt:string }, companies: Company[]): Caso {
+  return {
+    id: `CAS-${item.id}`, rawId: item.id,
+    empresa: companies.find(company => company.id === item.companyId)?.tradeName ?? `Empresa #${item.companyId}`,
+    tipo: SOURCE_LABEL[item.sourceType] ?? item.sourceType,
+    zona: "Sin ubicación",
+    fecha: formatFecha(item.createdAt), priority: "Media",
+    asignado: item.status === "PENDING_ASSIGNMENT" ? null : "Asignado",
+    estado: caseStatusLabel(item.status),
+    solicitudId: item.sourceType === "BPM_REQUEST" ? `SOL-${item.sourceReferenceId}` : undefined,
+  };
+}
 const initialsOf = (name: string): string =>
   name.trim().split(/\s+/).slice(0, 2).map(part => part[0]?.toUpperCase() ?? "").join("") || "?";
 /* Capacidad de referencia por técnico: el backend no expone un máximo de casos
@@ -524,7 +542,7 @@ function AsignacionesSection({ casos, onOpenCaso }: {
 function AsignarCasoSection({ caso, technicians, onConfirm, onBack }: {
   caso: Caso;
   technicians: Tecnico[];
-  onConfirm: (tech: Tecnico) => void;
+  onConfirm: (tech: Tecnico, reason: string) => Promise<void>;
   onBack: () => void;
 }) {
   const [selectedTechId, setSelectedTechId] = useState<string|null>(null);
@@ -532,14 +550,24 @@ function AsignarCasoSection({ caso, technicians, onConfirm, onBack }: {
   const [horaProg,  setHoraProg]  = useState("");
   const [obs,       setObs]       = useState("");
   const [confirming,setConfirming]= useState(false);
+  const [assignError, setAssignError] = useState("");
 
   const p = PRI[caso.priority];
   const selectedTech = technicians.find(t=>t.id===selectedTechId);
+  const isReassignment = Boolean(caso.asignado);
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!selectedTech) return;
     setConfirming(true);
-    setTimeout(()=>{ onConfirm(selectedTech); }, 1400);
+    setAssignError("");
+    const reason = obs.trim() ||
+      (isReassignment ? "Reasignación desde el panel del coordinador" : "Asignación desde el panel del coordinador");
+    try {
+      await onConfirm(selectedTech, reason);
+    } catch (error) {
+      setAssignError(error instanceof Error ? error.message : "No fue posible confirmar la asignación.");
+      setConfirming(false);
+    }
   };
 
   const techStatusColor = (s:TechStatus) =>
@@ -652,7 +680,8 @@ function AsignarCasoSection({ caso, technicians, onConfirm, onBack }: {
         </button>
       </div>
 
-      {!selectedTech && <p style={{ textAlign:"center", fontSize:"0.65rem", color:"rgba(148,163,184,0.28)", fontFamily:"Poppins, sans-serif", marginTop:6 }}>Selecciona un técnico disponible para confirmar la asignación.</p>}
+      {assignError && <p role="alert" style={{ textAlign:"center", fontSize:"0.7rem", color:"#fda4af", fontFamily:"Poppins, sans-serif", marginTop:8 }}>{assignError}</p>}
+      {!selectedTech && !assignError && <p style={{ textAlign:"center", fontSize:"0.65rem", color:"rgba(148,163,184,0.28)", fontFamily:"Poppins, sans-serif", marginTop:6 }}>Selecciona un técnico disponible para confirmar la asignación.</p>}
     </div>
   );
 }
@@ -844,15 +873,11 @@ export default function CoordinatorDashboard({
   const [metrics,       setMetrics]      = useState<DashboardMetrics|null>(null);
   const [technicians,   setTechnicians]  = useState<Tecnico[]>([]);
   const [schedule,      setSchedule]     = useState<ScheduleEntry[]>([]);
+  const [companiesList, setCompaniesList]= useState<Company[]>([]);
   const [casesLoading,  setCasesLoading] = useState(true);
   const [casesError,    setCasesError]   = useState("");
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(()=>setToast(null), 2800); };
-
-  const SOURCE_LABEL: Record<string,string> = {
-    BPM_REQUEST: "Solicitud BPM", HEALTH_ALERT: "Alerta LAPCH",
-    COMPLAINT: "Denuncia", INSTITUTIONAL: "Programación institucional",
-  };
 
   useEffect(() => {
     setCasesLoading(true);
@@ -866,6 +891,7 @@ export default function CoordinatorDashboard({
       listSchedule(accessToken, monthAgo, inTwoMonths).catch(() => []),
     ])
       .then(([alertsData, complaintsData, companies, caseData, dashboardData, technicianData, scheduleData]) => {
+        setCompaniesList(companies);
         setAlertas(alertsData.map(a => toAlertaItem(a, companies)));
         setDenuncias(complaintsData.map(toDenunciaItem));
         setMetrics(dashboardData);
@@ -875,16 +901,7 @@ export default function CoordinatorDashboard({
           status: "Disponible", specialty: "Técnico Evaluador",
           cases: tech.activeCaseCount, maxCases: TECH_MAX_CASES, zona: "—",
         })));
-        setCasos(caseData.map(item => ({
-          id: `CAS-${item.id}`, rawId: item.id,
-          empresa: companies.find(company => company.id === item.companyId)?.tradeName ?? `Empresa #${item.companyId}`,
-          tipo: SOURCE_LABEL[item.sourceType] ?? item.sourceType,
-          zona: "Sin ubicación",
-          fecha: formatFecha(item.createdAt), priority: "Media",
-          asignado: item.status === "PENDING_ASSIGNMENT" ? null : "Asignado",
-          estado: caseStatusLabel(item.status),
-          solicitudId: item.sourceType === "BPM_REQUEST" ? `SOL-${item.sourceReferenceId}` : undefined,
-        })));
+        setCasos(caseData.map(item => toCaso(item, companies)));
         setCasesLoading(false);
       })
       .catch(error => {
@@ -898,9 +915,18 @@ export default function CoordinatorDashboard({
 
   const openCaso = (id: string) => { setSelectedCase(id); navigate("asignar-caso"); };
 
-  const handleConfirmAssignment = (tech: Tecnico) => {
-    if (!selectedCaseId) return;
-    setCasos(prev=>prev.map(c=>c.id===selectedCaseId ? {...c,asignado:tech.name} : c));
+  const handleConfirmAssignment = async (tech: Tecnico, reason: string) => {
+    const target = casos.find(c => c.id === selectedCaseId);
+    if (!target) return;
+    await assignTechnician(accessToken, target.rawId, { technicianId: tech.id, reason });
+    try {
+      const refreshed = await listCases(accessToken);
+      setCasos(refreshed.map(item => toCaso(item, companiesList)));
+      const dashboardData = await getDashboard(accessToken).catch(() => null);
+      if (dashboardData) setMetrics(dashboardData);
+    } catch {
+      setCasos(prev => prev.map(c => c.id === selectedCaseId ? { ...c, asignado: tech.name } : c));
+    }
     setConfirmedTech(tech);
     navigate("confirmacion");
   };

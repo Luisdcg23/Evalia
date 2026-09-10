@@ -120,7 +120,7 @@ export default function CaseHistoryPanel({ accessToken }: { accessToken: string 
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.72rem", color: "#cbd5e1" }}>
               <thead>
                 <tr style={{ background: "rgba(255,255,255,0.03)", textAlign: "left" }}>
-                  {["Expediente", "Origen", "Cambio de estado", "Motivo", "Fecha", "Responsable"].map(head => (
+                  {["Expediente", "Origen", "Cambio de estado", "Motivo", "Fecha", "Responsable", "Informe", "Calificación"].map(head => (
                     <th key={head} style={{ padding: "9px 12px", fontWeight: 700, color: "rgba(148,163,184,0.7)", whiteSpace: "nowrap" }}>{head}</th>
                   ))}
                 </tr>
@@ -134,6 +134,26 @@ export default function CaseHistoryPanel({ accessToken }: { accessToken: string 
                     <td style={{ padding: "9px 12px" }}>{entry.reason ?? "—"}</td>
                     <td style={{ padding: "9px 12px", whiteSpace: "nowrap" }}>{formatWhen(entry.changedAt)}</td>
                     <td style={{ padding: "9px 12px" }}>{entry.changedBy ?? "Sistema"}</td>
+                    <td style={{ padding: "9px 12px", whiteSpace: "nowrap" }}>
+                      {entry.officialReport ? (
+                        <span title={`SHA-256 ${entry.officialReport.sha256}`} style={{ color: "#4ade80", fontWeight: 700 }}>
+                          Emitido · {formatWhen(entry.officialReport.generatedAt)}
+                        </span>
+                      ) : (
+                        <span style={{ color: "rgba(148,163,184,0.4)" }}>—</span>
+                      )}
+                    </td>
+                    <td style={{ padding: "9px 12px", whiteSpace: "nowrap" }}>
+                      {entry.evaluation ? (
+                        <span>
+                          <strong style={{ color: "#f1f5f9" }}>{Number(entry.evaluation.bpmPercentage).toFixed(1)}% BPM</strong>
+                          {" · "}{entry.evaluation.classification}
+                          {" · riesgo "}{entry.evaluation.riskLevel}
+                        </span>
+                      ) : (
+                        <span style={{ color: "rgba(148,163,184,0.4)" }}>Sin calificación</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

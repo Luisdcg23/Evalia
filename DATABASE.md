@@ -694,6 +694,27 @@ Rutas y roles:
 | `/api/evaluations/{id}/report/official/content` | GET | Técnico asignado, coordinador y administrador |
 | `/api/cases/{id}/close` | POST | Coordinador |
 
+## Consultas operativas e historial (RF-20)
+
+`GET /api/cases/history/search` (roles `COORDINADOR` y `ADMINISTRADOR`) devuelve las transiciones de
+estado de los expedientes (`Caso_Estado_Historial`) filtradas por empresa, técnico, estado, origen y
+rango de fechas, paginadas. Además de la transición, cada fila del resultado incluye —cuando existen—
+los dos bloques que pide RF-20, obtenidos por lectura sobre tablas que ya son inmutables por
+disparador, sin recalcular nada:
+
+- **Informe**: si el expediente tiene un informe oficial emitido (`Evaluacion_Informe_Oficial` a
+  través de `Evaluacion_Instancia` → `Evaluacion_Informe`), se devuelve `hasOfficialReport`, la fecha
+  de generación, el hash SHA-256, el nombre de archivo y el tamaño. Si hay más de una emisión oficial
+  se toma la más reciente por `fecha_generacion`.
+- **Calificación**: si existe `Evaluacion_Resultado` para la instancia del expediente, se devuelve el
+  porcentaje BPM, el código y la clasificación de la banda de la ficha, el puntaje del factor de
+  riesgo BPM, la frecuencia de inspección en meses y el nivel de riesgo (`Nivel_Riesgo.nombre` del
+  `Calculo_Riesgo` asociado al resultado).
+
+No se agregó tabla ni migración: `HistoryAsync` (en `OperationalReadEndpoints.cs`) resuelve estos
+datos con consultas de lectura sobre `Evaluacion_Instancia`, `Evaluacion_Resultado`, `Calculo_Riesgo`,
+`Nivel_Riesgo`, `Evaluacion_Informe` y `Evaluacion_Informe_Oficial`.
+
 ## Riesgo y frecuencia
 
 Se manejan escalas separadas y versionadas en `Escala_Riesgo` y `Escala_Riesgo_Nivel`:
