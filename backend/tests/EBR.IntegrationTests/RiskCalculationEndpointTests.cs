@@ -1,15 +1,27 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using EBR.Infrastructure.Persistence;
+using EBR.Infrastructure.Risk;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace EBR.IntegrationTests;
 
+/// <summary>
+/// El cálculo de riesgo solo opera sobre una versión publicada de reglas, que es un artefacto
+/// normativo: sus seis factores del establecimiento, sus escalas y sus bandas de frecuencia se cargan
+/// con <see cref="RiskCatalogSeeder"/> desde la matriz oficial. Por eso la prueba parte del catálogo
+/// sembrado en lugar de inventar factores sueltos por API.
+/// </summary>
 public sealed class RiskCalculationEndpointTests : IClassFixture<EbrApiFactory>
 {
+    private readonly EbrApiFactory _factory;
     private readonly HttpClient _client;
 
     public RiskCalculationEndpointTests(EbrApiFactory factory)
     {
+        _factory = factory;
         _client = factory.CreateClient();
     }
 
@@ -23,55 +35,98 @@ public sealed class RiskCalculationEndpointTests : IClassFixture<EbrApiFactory>
             rnc = $"6{Random.Shared.Next(10000000, 99999999)}",
             tradeName = "Riesgo"
         }, token);
-        var low = await CreateAsync<CreatedId>("/api/catalogs/risk-levels", new { name = "Bajo cálculo", points = 1 }, token);
-        var medium = await CreateAsync<CreatedId>("/api/catalogs/risk-levels", new { name = "Medio cálculo", points = 2 }, token);
-        var high = await CreateAsync<CreatedId>("/api/catalogs/risk-levels", new { name = "Alto cálculo", points = 3 }, token);
-        var category = await CreateAsync<CreatedId>("/api/catalogs/food-categories", new { name = "Cárnicos cálculo" }, token);
-        var subcategory = await CreateAsync<CreatedId>("/api/subcategories", new
-        {
-            categoryId = category.Id,
-            name = "Embutidos cálculo",
-            microbiologicalRiskLevelId = high.Id,
-            chemicalRiskLevelId = low.Id
-        }, token);
+
+        var catalog = await SeedPublishedRulesAsync();
         using var assignment = await PostAsync($"/api/companies/{company.Id}/subcategories", new
         {
-            subcategoryIds = new[] { subcategory.Id }
+            subcategoryIds = new[] { catalog.SubcategoryId }
         }, token);
         assignment.EnsureSuccessStatusCode();
-        var factor = await CreateAsync<FactorResponse>("/api/catalogs/structural-factors", new
-        {
-            code = $"COND-{Guid.NewGuid():N}",
-            name = "Condición sanitaria cálculo",
-            weight = 1m,
-            order = 1,
-            options = new[] { new { description = "Condición media", score = 2m, order = 1 } }
-        }, token);
-        await CreateAsync<CreatedId>("/api/catalogs/frequency-matrix", new { riskMin = 0m, minimumIncluded = true, riskMax = 3.6m, riskLevelId = low.Id, frequencyMonths = 12 }, token);
-        await CreateAsync<CreatedId>("/api/catalogs/frequency-matrix", new { riskMin = 3.6m, minimumIncluded = false, riskMax = 6.3m, riskLevelId = medium.Id, frequencyMonths = 6 }, token);
-        await CreateAsync<CreatedId>("/api/catalogs/frequency-matrix", new { riskMin = 6.3m, minimumIncluded = false, riskMax = 9m, riskLevelId = high.Id, frequencyMonths = 3 }, token);
 
         using var response = await PostAsync("/api/risk/calculate", new
         {
             companyId = company.Id,
-            factorSelections = new[] { new { factorId = factor.Id, optionId = factor.Options[0].Id } }
+            factorSelections = catalog.WorstSelections
         }, token);
         var result = await response.Content.ReadFromJsonAsync<RiskResponse>();
 
+        // Riesgo del producto: Grasa láctea con riesgo microbiológico BAJO = 2 puntos.
+        // Riesgo del establecimiento: peor opción de cada factor = 3, y los pesos suman 1, así que da 3.
+        // Riesgo total 2 x 3 = 6, que cae en la banda (3.6, 6.3] -> inspección cada 6 meses.
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(result);
-        Assert.Equal(3m, result.ProductRisk);
-        Assert.Equal(2m, result.EstablishmentRisk);
+        Assert.Equal(2m, result.ProductRisk);
+        Assert.Equal(3m, result.EstablishmentRisk);
         Assert.Equal(6m, result.TotalRisk);
-        Assert.Equal(medium.Id, result.RiskLevelId);
+        Assert.Equal(catalog.MediumRiskLevelId, result.RiskLevelId);
         Assert.Equal(6, result.FrequencyMonths);
-        Assert.Contains("Condición media", result.FactorDetailsJson, StringComparison.Ordinal);
+        Assert.Contains(catalog.WorstOptionDescription, result.FactorDetailsJson, StringComparison.Ordinal);
 
         using var historyRequest = new HttpRequestMessage(HttpMethod.Get, $"/api/companies/{company.Id}/risk");
         historyRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         using var historyResponse = await _client.SendAsync(historyRequest);
         var history = await historyResponse.Content.ReadFromJsonAsync<List<RiskResponse>>();
         Assert.Single(history!);
+    }
+
+    [Fact]
+    public async Task CalculateIsRejectedWhenTheSelectionDoesNotCoverEveryFactor()
+    {
+        var token = await LoginAsync("admin@ebr.local");
+        var company = await CreateAsync<CreatedId>("/api/companies", new
+        {
+            legalName = "Industria Incompleta SRL",
+            rnc = $"6{Random.Shared.Next(10000000, 99999999)}",
+            tradeName = "Incompleta"
+        }, token);
+
+        var catalog = await SeedPublishedRulesAsync();
+        using var assignment = await PostAsync($"/api/companies/{company.Id}/subcategories", new
+        {
+            subcategoryIds = new[] { catalog.SubcategoryId }
+        }, token);
+        assignment.EnsureSuccessStatusCode();
+
+        using var response = await PostAsync("/api/risk/calculate", new
+        {
+            companyId = company.Id,
+            factorSelections = catalog.WorstSelections.Take(1).ToArray()
+        }, token);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    private async Task<SeededCatalog> SeedPublishedRulesAsync()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var context = scope.ServiceProvider.GetRequiredService<EbrDbContext>();
+        if (!await context.RiskRuleVersions.AnyAsync())
+        {
+            const string source = """
+                ===== SHEET: Categorización_de_alimentos (1002x28) =====
+                A1=CATEGORIA | B1=SUBCATEGORIA | C1=RIESGO MICROBIOLÓGICO | D1=PUNTAJE | E1=RIESGO QUÍMICO | F1=PUNTAJE | G1=RIESGO TOTAL
+                A2=Productos lácteos | B2=Grasa láctea | C2=BAJO | D2=2 | G2=2
+                """;
+            await new RiskCatalogSeeder(context).SeedAsync(source, CancellationToken.None);
+        }
+
+        var version = await context.RiskRuleVersions
+            .Where(value => value.IsPublished)
+            .OrderByDescending(value => value.Version)
+            .FirstAsync();
+        var factors = await context.StructuralRiskFactors.AsNoTracking().Include(value => value.Options)
+            .Where(value => value.RuleVersionId == version.Id && value.IsActive)
+            .OrderBy(value => value.Order)
+            .ToListAsync();
+        var worst = factors
+            .Select(factor => factor.Options.OrderByDescending(option => option.Score).First())
+            .ToList();
+
+        return new SeededCatalog(
+            (await context.FoodSubcategories.SingleAsync(value => value.Name == "Grasa láctea")).Id,
+            (await context.RiskLevels.SingleAsync(value => value.Name == "Riesgo medio")).Id,
+            factors.Zip(worst, (factor, option) => new FactorSelection(factor.Id, option.Id)).ToArray(),
+            worst[0].Description);
     }
 
     private async Task<string> LoginAsync(string email)
@@ -95,10 +150,15 @@ public sealed class RiskCalculationEndpointTests : IClassFixture<EbrApiFactory>
         return await _client.SendAsync(request);
     }
 
+    private sealed record SeededCatalog(
+        int SubcategoryId,
+        int MediumRiskLevelId,
+        IReadOnlyList<FactorSelection> WorstSelections,
+        string WorstOptionDescription);
+
+    private sealed record FactorSelection(int FactorId, int OptionId);
     private sealed record LoginResponse(string AccessToken);
     private sealed record CreatedId(int Id);
-    private sealed record FactorOptionResponse(int Id);
-    private sealed record FactorResponse(int Id, IReadOnlyList<FactorOptionResponse> Options);
     private sealed record RiskResponse(
         decimal ProductRisk,
         decimal EstablishmentRisk,

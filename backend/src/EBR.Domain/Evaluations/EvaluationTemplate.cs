@@ -9,9 +9,11 @@ public static class EvaluationTemplateStatuses
 
 public static class EvaluationItemTypes
 {
+    public const string Question = "QUESTION";
+
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
     {
-        "CHAPTER", "SECTION", "SUBSECTION", "GROUP", "QUESTION", "INSTRUCTION", "OPTION"
+        "CHAPTER", "SECTION", "SUBSECTION", "GROUP", Question, "INSTRUCTION", "OPTION"
     };
 }
 

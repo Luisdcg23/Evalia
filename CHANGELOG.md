@@ -50,6 +50,55 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   permite crear un expediente de inspección directamente, sin solicitud,
   alerta ni denuncia previa, con motivo y observaciones obligatorios/
   opcionales según el mismo patrón de los demás orígenes.
+- Asignación y reasignación de técnico evaluador a un expediente
+  (`POST /api/cases/{id}/assign`, rol `COORDINADOR`): valida que el técnico
+  tenga el rol Técnico Evaluador y esté activo, transiciona el caso de
+  pendiente de asignación a asignado en la primera asignación, y conserva el
+  historial completo de asignaciones sin duplicar la asignación vigente
+  (`GET /api/cases/{id}/assignments`), con procedimiento transaccional
+  `sp_asignar_tecnico`.
+- Programación y agenda de evaluaciones (RF-07, RF-11): programar, reprogramar y
+  cancelar la fecha de una evaluación con historial versionado
+  (`POST /api/cases/{id}/schedule`, `POST /api/cases/{id}/reschedule`,
+  `POST /api/cases/{id}/cancel-schedule`, `GET /api/cases/{id}/schedules`), con
+  validación de que el técnico asignado no tenga otra programación vigente que
+  se solape en el tiempo. Programar exige un técnico ya asignado y transiciona
+  el caso a programado; reprogramar y cancelar no cambian el estado del caso.
+  Consulta de agenda por rango de fechas con empresa, dirección, fecha y estado
+  (`GET /api/cases/schedule?from=&to=`), con procedimiento transaccional
+  `sp_programar_evaluacion`.
+- Ejecución de la evaluación en campo (RF-12, RF-13): instancia de evaluación
+  que congela la plantilla publicada y la versión de reglas de riesgo vigentes
+  al iniciarse (`POST /api/cases/{id}/evaluations`), captura de respuestas por
+  pregunta con guardado automático idempotente
+  (`PUT /api/evaluations/{id}/responses/{itemId}`), consulta de la instancia
+  con su progreso de captura (`GET /api/evaluations/{id}`) y envío que bloquea
+  la evaluación y transiciona el expediente a pendiente de informe
+  (`POST /api/evaluations/{id}/submit`). Las cuatro rutas son exclusivas del
+  rol Técnico Evaluador y validan la asignación vigente del expediente. Una
+  evaluación enviada es inmutable, garantizado también en la base con los
+  disparadores `tr_evaluacion_instancia_inmutable` y
+  `tr_evaluacion_respuesta_bloqueada`, con los procedimientos transaccionales
+  `sp_iniciar_evaluacion`, `sp_guardar_respuestas` y `sp_enviar_evaluacion`.
+- Cálculo BPM y riesgo integrado (RF-14): al enviar una evaluación se registra
+  una fotografía inmutable del resultado con el porcentaje BPM ponderado (que
+  excluye del denominador las preguntas marcadas No aplica), la calificación
+  declarada por la ficha, el conteo de no conformidades por severidad según la
+  criticidad de los criterios de guía, y el nivel de riesgo y la frecuencia de
+  inspección calculados con la versión de reglas congelada en la evaluación
+  (`GET /api/evaluations/{id}/result`). Publicar después otra versión de
+  reglas no altera resultados ya registrados, garantizado en la base con el
+  disparador `tr_evaluacion_resultado_inmutable`.
+
+### Cambiado
+
+- Las altas de catálogos de riesgo (`/api/catalogs`) quedan enlazadas a una
+  versión de reglas: los peligros de subcategoría y las bandas de frecuencia
+  entran en la versión publicada vigente y los factores del establecimiento en
+  el borrador en curso, porque una versión publicada exige el juego completo
+  de factores con pesos que sumen 1. Con ello se eliminó la ruta de cálculo
+  heredada que operaba sobre `puntaje_total` sin versión de reglas: el motor
+  solo calcula contra una versión publicada y vigente.
 
 ## [0.1.0] - 2026-09-08
 

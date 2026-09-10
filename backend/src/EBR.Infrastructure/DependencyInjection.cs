@@ -1,4 +1,4 @@
-using EBR.Application.Identity;
+﻿using EBR.Application.Identity;
 using EBR.Infrastructure.Identity;
 using EBR.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Identity;
@@ -8,6 +8,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using EBR.Infrastructure.Risk;
 using EBR.Application.Risk;
+using EBR.Application.Evaluations;
+using EBR.Infrastructure.Evaluations;
 
 namespace EBR.Infrastructure;
 
@@ -55,6 +57,8 @@ public static class DependencyInjection
                 .ValidateOnStart();
             services.AddScoped<IAuthenticationService, AuthenticationService>();
             services.AddScoped<IRiskCalculationService, RiskCalculationService>();
+            services.AddScoped<IEvaluationSubmissionService, EvaluationSubmissionService>();
+            services.AddScoped<RiskRuleVersionProvisioner>();
         }
 
         services.AddSingleton<IRiskFormulaService, RiskFormulaService>();

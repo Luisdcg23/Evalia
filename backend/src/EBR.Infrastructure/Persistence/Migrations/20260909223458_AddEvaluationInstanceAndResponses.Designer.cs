@@ -3,6 +3,7 @@ using System;
 using EBR.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace EBR.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(EbrDbContext))]
-    partial class EbrDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260909223458_AddEvaluationInstanceAndResponses")]
+    partial class AddEvaluationInstanceAndResponses
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -407,10 +410,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("caso_id");
 
-                    b.Property<int>("RiskRuleVersionId")
-                        .HasColumnType("integer")
-                        .HasColumnName("version_regla_riesgo_id");
-
                     b.Property<DateTimeOffset>("StartedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("fecha_inicio");
@@ -433,10 +432,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("enviado_por");
 
-                    b.Property<Guid>("TemplateFamilyId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("familia_plantilla_id");
-
                     b.Property<int>("TemplateId")
                         .HasColumnType("integer")
                         .HasColumnName("plantilla_id");
@@ -446,8 +441,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.HasIndex("CaseId")
                         .IsUnique();
 
-                    b.HasIndex("RiskRuleVersionId");
-
                     b.HasIndex("StartedBy");
 
                     b.HasIndex("SubmittedBy");
@@ -456,54 +449,9 @@ namespace EBR.Infrastructure.Persistence.Migrations
 
                     b.ToTable("Evaluacion_Instancia", null, t =>
                         {
-                            t.HasCheckConstraint("CK_Evaluacion_Instancia_Envio", "(estado = 'IN_PROGRESS' AND fecha_envio IS NULL AND enviado_por IS NULL) OR (estado = 'SUBMITTED' AND fecha_envio IS NOT NULL AND enviado_por IS NOT NULL)");
+                        t.HasCheckConstraint("CK_Evaluacion_Instancia_Estado", "estado IN ('IN_PROGRESS','SUBMITTED')");
 
-                            t.HasCheckConstraint("CK_Evaluacion_Instancia_Estado", "estado IN ('IN_PROGRESS','SUBMITTED')");
-                        });
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationNonConformity", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTimeOffset>("DetectedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_deteccion");
-
-                    b.Property<int>("EvaluationResponseId")
-                        .HasColumnType("integer")
-                        .HasColumnName("respuesta_id");
-
-                    b.Property<int>("EvaluationResultId")
-                        .HasColumnType("integer")
-                        .HasColumnName("resultado_id");
-
-                    b.Property<int>("GuidanceCriterionId")
-                        .HasColumnType("integer")
-                        .HasColumnName("criterio_id");
-
-                    b.Property<string>("Severity")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasColumnName("severidad");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EvaluationResponseId");
-
-                    b.HasIndex("GuidanceCriterionId");
-
-                    b.HasIndex("EvaluationResultId", "GuidanceCriterionId")
-                        .IsUnique();
-
-                    b.ToTable("Evaluacion_No_Conformidad", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_Evaluacion_No_Conformidad_Severidad", "severidad IN ('CRITICAL','MAJOR','MINOR')");
+                        t.HasCheckConstraint("CK_Evaluacion_Instancia_Envio", "(estado = 'IN_PROGRESS' AND fecha_envio IS NULL AND enviado_por IS NULL) OR (estado = 'SUBMITTED' AND fecha_envio IS NOT NULL AND enviado_por IS NOT NULL)");
                         });
                 });
 
@@ -672,94 +620,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.ToTable("Plantilla_Evaluacion_Opcion", null, t =>
                         {
                             t.HasCheckConstraint("CK_Opcion_Evaluable", "(valor IS NULL AND NOT cuenta_denominador) OR (valor IS NOT NULL AND cuenta_denominador AND valor BETWEEN 0 AND 1)");
-                        });
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationResult", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<decimal>("BpmDenominator")
-                        .HasPrecision(10, 3)
-                        .HasColumnType("numeric(10,3)")
-                        .HasColumnName("denominador_bpm");
-
-                    b.Property<decimal>("BpmPercentage")
-                        .HasPrecision(6, 2)
-                        .HasColumnType("numeric(6,2)")
-                        .HasColumnName("porcentaje_bpm");
-
-                    b.Property<decimal>("BpmPoints")
-                        .HasPrecision(10, 3)
-                        .HasColumnType("numeric(10,3)")
-                        .HasColumnName("puntos_bpm");
-
-                    b.Property<decimal>("BpmRiskScore")
-                        .HasPrecision(5, 2)
-                        .HasColumnType("numeric(5,2)")
-                        .HasColumnName("puntaje_riesgo_bpm");
-
-                    b.Property<DateTimeOffset>("CalculatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("fecha_calculo");
-
-                    b.Property<string>("Classification")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("character varying(30)")
-                        .HasColumnName("clasificacion");
-
-                    b.Property<int>("CriticalCount")
-                        .HasColumnType("integer")
-                        .HasColumnName("cantidad_criticas");
-
-                    b.Property<int>("EvaluationInstanceId")
-                        .HasColumnType("integer")
-                        .HasColumnName("instancia_id");
-
-                    b.Property<int>("FrequencyMonths")
-                        .HasColumnType("integer")
-                        .HasColumnName("frecuencia_meses");
-
-                    b.Property<int>("MajorCount")
-                        .HasColumnType("integer")
-                        .HasColumnName("cantidad_mayores");
-
-                    b.Property<int>("MinorCount")
-                        .HasColumnType("integer")
-                        .HasColumnName("cantidad_menores");
-
-                    b.Property<string>("QualificationCode")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("character varying(30)")
-                        .HasColumnName("codigo_calificacion");
-
-                    b.Property<int>("RiskCalculationId")
-                        .HasColumnType("integer")
-                        .HasColumnName("calculo_riesgo_id");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("EvaluationInstanceId")
-                        .IsUnique();
-
-                    b.HasIndex("RiskCalculationId")
-                        .IsUnique();
-
-                    b.ToTable("Evaluacion_Resultado", null, t =>
-                        {
-                            t.HasCheckConstraint("CK_Evaluacion_Resultado_Conteos", "cantidad_criticas >= 0 AND cantidad_mayores >= 0 AND cantidad_menores >= 0");
-
-                            t.HasCheckConstraint("CK_Evaluacion_Resultado_Denominador", "denominador_bpm > 0 AND puntos_bpm >= 0 AND puntos_bpm <= denominador_bpm");
-
-                            t.HasCheckConstraint("CK_Evaluacion_Resultado_Frecuencia", "frecuencia_meses > 0");
-
-                            t.HasCheckConstraint("CK_Evaluacion_Resultado_Porcentaje", "porcentaje_bpm BETWEEN 0 AND 100");
                         });
                 });
 
@@ -2391,12 +2251,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
-                    b.HasOne("EBR.Domain.RiskCatalogs.RiskRuleVersion", null)
-                        .WithMany()
-                        .HasForeignKey("RiskRuleVersionId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
                     b.HasOne("EBR.Infrastructure.Identity.ApplicationUser", null)
                         .WithMany()
                         .HasForeignKey("StartedBy")
@@ -2411,27 +2265,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.HasOne("EBR.Domain.Evaluations.EvaluationTemplate", null)
                         .WithMany()
                         .HasForeignKey("TemplateId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationNonConformity", b =>
-                {
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationResponse", null)
-                        .WithMany()
-                        .HasForeignKey("EvaluationResponseId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationResult", null)
-                        .WithMany()
-                        .HasForeignKey("EvaluationResultId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationGuidanceCriterion", null)
-                        .WithMany()
-                        .HasForeignKey("GuidanceCriterionId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
@@ -2471,21 +2304,6 @@ namespace EBR.Infrastructure.Persistence.Migrations
                     b.HasOne("EBR.Domain.Evaluations.EvaluationTemplate", null)
                         .WithMany()
                         .HasForeignKey("TemplateId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("EBR.Domain.Evaluations.EvaluationResult", b =>
-                {
-                    b.HasOne("EBR.Domain.Evaluations.EvaluationInstance", null)
-                        .WithOne()
-                        .HasForeignKey("EBR.Domain.Evaluations.EvaluationResult", "EvaluationInstanceId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("EBR.Domain.RiskCatalogs.RiskCalculation", null)
-                        .WithOne()
-                        .HasForeignKey("EBR.Domain.Evaluations.EvaluationResult", "RiskCalculationId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

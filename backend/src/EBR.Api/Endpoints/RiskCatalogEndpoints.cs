@@ -1,5 +1,6 @@
-using EBR.Domain.Identity;
+﻿using EBR.Domain.Identity;
 using EBR.Domain.RiskCatalogs;
+using EBR.Infrastructure.Risk;
 using EBR.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -75,6 +76,7 @@ public static class RiskCatalogEndpoints
     private static async Task<IResult> CreateSubcategoryAsync(
         CreateSubcategoryRequest request,
         EbrDbContext context,
+        RiskRuleVersionProvisioner provisioner,
         CancellationToken cancellationToken)
     {
         var categoryExists = await context.FoodCategories.AnyAsync(item => item.Id == request.CategoryId, cancellationToken);
@@ -100,6 +102,22 @@ public static class RiskCatalogEndpoints
         };
         context.FoodSubcategories.Add(subcategory);
         await context.SaveChangesAsync(cancellationToken);
+
+        var version = await provisioner.CatalogTargetAsync(cancellationToken);
+        context.FoodSubcategoryHazards.AddRange(
+            new FoodSubcategoryHazard
+            {
+                SubcategoryId = subcategory.Id,
+                HazardType = "MICROBIOLOGICAL",
+                LevelId = (await provisioner.ProductLevelAsync(version, microbiological, cancellationToken)).Id
+            },
+            new FoodSubcategoryHazard
+            {
+                SubcategoryId = subcategory.Id,
+                HazardType = "CHEMICAL",
+                LevelId = (await provisioner.ProductLevelAsync(version, chemical, cancellationToken)).Id
+            });
+        await context.SaveChangesAsync(cancellationToken);
         return Results.Created($"/api/subcategories/{subcategory.Id}", subcategory);
     }
 
@@ -110,15 +128,24 @@ public static class RiskCatalogEndpoints
         return Results.Ok(factors);
     }
 
+    /// <summary>
+    /// Da de alta un factor del establecimiento en el borrador de reglas en curso, nunca en la versión
+    /// publicada: una versión publicada exige el juego completo de factores normativos con pesos que
+    /// sumen 1, así que añadirle un factor suelto la dejaría inconsistente. El borrador solo pasa a
+    /// regir cuando se publica con su juego de factores completo.
+    /// </summary>
     private static async Task<IResult> CreateFactorAsync(
         CreateFactorRequest request,
         EbrDbContext context,
+        RiskRuleVersionProvisioner provisioner,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Code) || string.IsNullOrWhiteSpace(request.Name) ||
             request.Weight <= 0 || request.Options.Count == 0) return Results.BadRequest();
+        var version = await provisioner.FactorDraftAsync(cancellationToken);
         var factor = new StructuralRiskFactor
         {
+            RuleVersionId = version.Id,
             Code = request.Code.Trim().ToUpperInvariant(),
             Name = request.Name.Trim(),
             Weight = request.Weight,
@@ -144,13 +171,19 @@ public static class RiskCatalogEndpoints
     private static async Task<IResult> CreateFrequencyMatrixAsync(
         CreateFrequencyMatrixRequest request,
         EbrDbContext context,
+        RiskRuleVersionProvisioner provisioner,
         CancellationToken cancellationToken)
     {
         if (request.RiskMax <= request.RiskMin || request.FrequencyMonths <= 0 ||
             !await context.RiskLevels.AnyAsync(level => level.Id == request.RiskLevelId, cancellationToken))
             return Results.BadRequest();
+        var version = await provisioner.CatalogTargetAsync(cancellationToken);
+        var riskLevel = await context.RiskLevels.SingleAsync(level => level.Id == request.RiskLevelId, cancellationToken);
+        var scaleLevel = await provisioner.FrequencyLevelAsync(version, riskLevel, cancellationToken);
         var matrix = new InspectionFrequencyMatrix
         {
+            RuleVersionId = version.Id,
+            ScaleLevelId = scaleLevel.Id,
             RiskMin = request.RiskMin,
             MinimumIncluded = request.MinimumIncluded,
             RiskMax = request.RiskMax,

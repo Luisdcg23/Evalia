@@ -100,6 +100,7 @@ if (authenticationConfigured)
     app.MapBpmRequestEndpoints();
     app.MapCaseEndpoints();
     app.MapRegulatoryOriginEndpoints();
+    app.MapEvaluationInstanceEndpoints();
 }
 
 if (app.Environment.IsEnvironment("Testing") ||

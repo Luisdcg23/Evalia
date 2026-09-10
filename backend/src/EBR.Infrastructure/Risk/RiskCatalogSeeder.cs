@@ -1,4 +1,4 @@
-using EBR.Domain.RiskCatalogs;
+﻿using EBR.Domain.RiskCatalogs;
 using EBR.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -13,6 +13,12 @@ public sealed class RiskCatalogSeeder(EbrDbContext context)
 {
     public const string ProductScaleCode = "PRODUCT";
     public const string FrequencyScaleCode = "FREQUENCY";
+
+    /// <summary>
+    /// Código del factor del establecimiento que representa el cumplimiento con las BPM: es el punto
+    /// por el que el resultado de una evaluación entra en el cálculo de riesgo de la empresa.
+    /// </summary>
+    public const string BpmFactorCode = "BPM";
     private const int CatalogVersion = 1;
 
     private static readonly (string Code, string Name, decimal Score, int Rank)[] ProductLevels =
@@ -45,7 +51,7 @@ public sealed class RiskCatalogSeeder(EbrDbContext context)
             "Tiene implementado el HACCP en el 75% de las líneas de producción",
             "Tiene implementado el HACCP en todas las líneas de producción"
         ]),
-        ("BPM", "Cumplimiento con las BPM", 0.56m,
+        (BpmFactorCode, "Cumplimiento con las BPM", 0.56m,
         [
             "≤ 81%",
             "82% - 89%",

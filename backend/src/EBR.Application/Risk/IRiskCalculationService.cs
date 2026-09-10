@@ -10,7 +10,8 @@ public sealed record RiskFactorSelection(int FactorId, int OptionId);
 public sealed record RiskCalculationCommand(
     int CompanyId,
     IReadOnlyList<RiskFactorSelection> FactorSelections,
-    Guid GeneratedBy);
+    Guid GeneratedBy,
+    int? RuleVersionId = null);
 
 public sealed record RiskCalculationResult(
     int Id,
