@@ -181,6 +181,7 @@ export default function App() {
           userName={loggedUser.name}
           onBack={doLogout}
           onCompanyProfile={() => {}}
+          accessToken={loadSession()?.accessToken ?? ""}
         />
       );
     }
