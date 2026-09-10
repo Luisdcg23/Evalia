@@ -9,7 +9,9 @@ using Microsoft.Extensions.Hosting;
 using EBR.Infrastructure.Risk;
 using EBR.Application.Risk;
 using EBR.Application.Evaluations;
+using EBR.Application.Evidence;
 using EBR.Infrastructure.Evaluations;
+using EBR.Infrastructure.Evidence;
 
 namespace EBR.Infrastructure;
 
@@ -62,6 +64,17 @@ public static class DependencyInjection
         }
 
         services.AddSingleton<IRiskFormulaService, RiskFormulaService>();
+
+        // Almacenamiento de evidencias: la abstracción es la misma para todos los entornos y solo
+        // cambia la implementación. Sin extremo de MinIO configurado se usa el sistema de archivos
+        // local, que reproduce la misma semántica de bucket sin exigir un servicio adicional.
+        services.AddOptions<EvidenceStorageOptions>()
+            .Bind(configuration.GetSection(EvidenceStorageOptions.SectionName));
+        var evidenceEndpoint = configuration[$"{EvidenceStorageOptions.SectionName}:Endpoint"];
+        if (string.IsNullOrWhiteSpace(evidenceEndpoint))
+            services.AddSingleton<IEvidenceStorage, FileSystemEvidenceStorage>();
+        else
+            services.AddSingleton<IEvidenceStorage, MinioEvidenceStorage>();
 
         return services;
     }

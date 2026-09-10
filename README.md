@@ -11,7 +11,7 @@ Aplicación web local para gestionar evaluaciones basadas en riesgo e inspeccion
 - PostgreSQL 18 y pgAdmin 4
 - React 19, TypeScript y Vite
 - Node.js 20, 22 o 24 y pnpm
-- MinIO local para el almacenamiento futuro de evidencias
+- MinIO local para el almacenamiento de evidencias
 - xUnit y Vitest
 
 ## Funcionalidades disponibles
@@ -34,7 +34,6 @@ Aplicación web local para gestionar evaluaciones basadas en riesgo e inspeccion
 - Asignación y reasignación histórica de técnicos.
 - Programación, reprogramación, cancelación y calendario de evaluaciones.
 - Ejecución completa de evaluaciones, respuestas, calificación y autosave.
-- Integración efectiva de evidencias con MinIO.
 - Funcionamiento PWA offline, outbox y sincronización idempotente.
 - Informes PDF, revisión del coordinador, correcciones y cierre inmutable.
 - Notificaciones, dashboards con métricas reales y consulta histórica completa.
@@ -170,7 +169,7 @@ storage/     Binario y datos locales de MinIO, excluidos de Git
 ## Consideraciones
 
 - El sistema se ejecuta completamente en local y no utiliza Docker.
-- PostgreSQL conserva datos relacionales y metadatos; los archivos grandes se almacenarán en MinIO.
+- PostgreSQL conserva datos relacionales y metadatos; los binarios de las evidencias se guardan en MinIO. Si `Minio__Endpoint` está vacío, la API usa el sistema de archivos local (`storage/evidencias`) con la misma abstracción.
 - Los expedientes, cálculos y versiones publicadas conservan historial y no deben eliminarse físicamente.
 - La interfaz adapta las opciones visibles al rol, pero la autorización efectiva siempre se valida en la API.
 - Una compilación satisfactoria no implica que los módulos señalados como pendientes estén terminados.

@@ -90,6 +90,19 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   reglas no altera resultados ya registrados, garantizado en la base con el
   disparador `tr_evaluacion_resultado_inmutable`.
 
+- Evidencias de la evaluación en campo: subida y descarga autorizadas
+  (`POST /api/evaluations/{id}/evidence`, `GET /api/evaluations/{id}/evidence`,
+  `GET /api/evaluations/{id}/evidence/{evidenciaId}/content`) sobre una
+  abstracción de almacenamiento de objetos con dos implementaciones, MinIO local
+  y sistema de archivos, seleccionadas por configuración. En PostgreSQL solo se
+  guardan los metadatos (nombre, tipo MIME, tamaño, hash SHA-256 calculado por el
+  servidor y clave del objeto); el binario nunca entra en la base. Se admiten
+  únicamente imágenes JPEG/PNG/WEBP y PDF hasta 15 MB, validado también con
+  restricciones de comprobación. Adjuntar es exclusivo del técnico asignado y
+  solo mientras la evaluación sigue abierta; consultar y descargar los añaden
+  Coordinador y Administrador. Los metadatos son inmutables
+  (`tr_evaluacion_evidencia_valida`, `tr_evaluacion_evidencia_inmutable`).
+
 ### Cambiado
 
 - Las altas de catálogos de riesgo (`/api/catalogs`) quedan enlazadas a una

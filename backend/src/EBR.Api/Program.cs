@@ -101,6 +101,7 @@ if (authenticationConfigured)
     app.MapCaseEndpoints();
     app.MapRegulatoryOriginEndpoints();
     app.MapEvaluationInstanceEndpoints();
+    app.MapEvaluationEvidenceEndpoints();
 }
 
 if (app.Environment.IsEnvironment("Testing") ||

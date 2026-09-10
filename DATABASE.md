@@ -156,9 +156,11 @@ futuro sin que las filas inactivas históricas bloqueen la restricción.
 RF-02 exige la carta de autorización como adjunto obligatorio del registro de usuario y RF-05 exige
 documentación obligatoria para las solicitudes BPM. En ambos casos el sistema solo almacena
 **metadatos** del documento (nombre de archivo, tipo MIME, tamaño en bytes, hash y una referencia de
-almacenamiento en texto, por ejemplo una ruta o clave que en el futuro apuntará a MinIO). El binario
-nunca se persiste en PostgreSQL; el almacenamiento real de objetos queda como tarea futura separada
-("almacenamiento de evidencias"). Ninguna de las dos entidades tiene una propiedad de tipo binario.
+almacenamiento en texto, por ejemplo una ruta o clave de objeto). El binario nunca se persiste en
+PostgreSQL. Para estas dos entidades la referencia de almacenamiento la declara el cliente y el
+sistema no la resuelve todavía contra el almacenamiento de objetos; la subida efectiva de binarios
+está implementada solo para las evidencias de evaluación (ver "Evidencias de la evaluación en
+campo"). Ninguna de las dos entidades tiene una propiedad de tipo binario.
 
 `Documento_Registro_Usuario` (`UserRegistrationDocument`) se liga al usuario por `usuario_id`.
 `tipo_documento` es un catálogo cerrado (`UserRegistrationDocumentTypes`), hoy con un único valor,
@@ -512,6 +514,51 @@ juego completo de factores con pesos que sumen exactamente `1` y añadirle un fa
 inconsistente. Con eso la ruta heredada sobre `puntaje_total` se eliminó: el motor solo calcula
 contra una versión publicada y vigente, y `puntaje_total` queda únicamente como dato histórico.
 
+## Evidencias de la evaluación en campo
+
+`Evaluacion_Evidencia` guarda **solo metadatos**: `nombre_archivo`, `tipo_mime`, `tamano_bytes`,
+`hash`, `clave_objeto`, `descripcion`, `fecha_carga` y `cargado_por`. El binario nunca entra en
+PostgreSQL; vive en el almacenamiento de objetos y la fila lo referencia por `clave_objeto`, que es
+única para que dos evidencias no puedan apuntar al mismo objeto. Cada evidencia pertenece a una
+`Evaluacion_Instancia` y, opcionalmente, a una `Evaluacion_Respuesta` concreta: una fotografía de un
+hallazgo se ancla a la pregunta que la sustenta, mientras que un documento general del recorrido se
+adjunta a la instancia con `respuesta_id` nulo.
+
+El `hash` es SHA-256 en hexadecimal minúsculo y lo calcula el servidor sobre los bytes recibidos,
+nunca el cliente: es lo que permite comprobar más tarde que el objeto descargado es el mismo que se
+subió. La restricción `CK_Evaluacion_Evidencia_Hash` exige exactamente 64 caracteres,
+`CK_Evaluacion_Evidencia_Tipo` limita `tipo_mime` a `image/jpeg`, `image/png`, `image/webp` y
+`application/pdf`, y `CK_Evaluacion_Evidencia_Tamano` acota el tamaño a un máximo de 15 MB
+(`15728640` bytes) y prohíbe el archivo vacío. Las tres reglas viven también en el endpoint, porque
+las pruebas de integración corren sobre el proveedor en memoria, que no evalúa restricciones de
+comprobación.
+
+Disparadores:
+
+- `tr_evaluacion_evidencia_valida` (BEFORE INSERT) rechaza adjuntar a una instancia inexistente o ya
+  enviada, y exige que la respuesta referenciada pertenezca a la misma instancia.
+- `tr_evaluacion_evidencia_inmutable` (BEFORE UPDATE OR DELETE) rechaza cualquier cambio: alterar el
+  hash o la clave rompería la correspondencia con el binario. Una evidencia equivocada se aclara en
+  la evaluación, no se borra.
+
+Rutas y roles:
+
+| Ruta | Método | Rol |
+|---|---|---|
+| `/api/evaluations/{id}/evidence` | POST | Técnico evaluador asignado, con la evaluación abierta |
+| `/api/evaluations/{id}/evidence` | GET | Técnico asignado, coordinador y administrador |
+| `/api/evaluations/{id}/evidence/{evidenciaId}/content` | GET | Técnico asignado, coordinador y administrador |
+
+Un técnico sin la asignación vigente del expediente recibe `403` tanto al adjuntar como al consultar,
+y las cuentas de empresa no tienen acceso a estas rutas. Adjuntar sobre una evaluación ya enviada
+devuelve `409`.
+
+El binario se guarda mediante la abstracción `IEvidenceStorage`, con dos implementaciones elegidas
+por configuración: MinIO local cuando `Minio__Endpoint` tiene valor y el sistema de archivos
+(`storage/evidencias`) cuando está vacío. La clave del objeto es
+`evaluaciones/{instancia}/{identificador}{extensión}`, generada por el servidor, de modo que el
+nombre original del archivo nunca determina la ruta de escritura.
+
 ## Riesgo y frecuencia
 
 Se manejan escalas separadas y versionadas en `Escala_Riesgo` y `Escala_Riesgo_Nivel`:
@@ -729,6 +776,11 @@ Disparadores:
   inserta directamente por SQL.
 - `tr_evaluacion_resultado_inmutable` sobre `Evaluacion_Resultado` y `Evaluacion_No_Conformidad`
   impide alterar o eliminar el resultado registrado en el envío de una evaluación.
+- `tr_evaluacion_evidencia_valida` sobre `Evaluacion_Evidencia` admite adjuntar únicamente mientras la
+  instancia sigue en captura y solo con una respuesta de la misma instancia, mediante la función
+  `fn_evaluacion_evidencia_valida()`.
+- `tr_evaluacion_evidencia_inmutable` sobre `Evaluacion_Evidencia` impide modificar o eliminar el
+  metadato de una evidencia registrada, mediante la función `fn_evaluacion_evidencia_inmutable()`.
 
 Los nombres anteriores representan el contrato estable. Su creación se versiona dentro de una migración de EF Core.
 
@@ -749,7 +801,9 @@ procedimiento `sp_asignar_tecnico` se incorporaron en `AddCaseAssignment`. La ta
 `tr_evaluacion_respuesta_item_plantilla` se incorporaron en `AddEvaluationInstanceAndResponses`. Las
 tablas `Evaluacion_Resultado` y `Evaluacion_No_Conformidad`, el disparador
 `tr_evaluacion_resultado_inmutable` y la versión de `sp_iniciar_evaluacion` que congela la versión de
-reglas de riesgo se incorporaron en `AddEvaluationResult`. El resto sigue pendiente de las tareas
+reglas de riesgo se incorporaron en `AddEvaluationResult`. La tabla `Evaluacion_Evidencia`, las
+funciones `fn_evaluacion_evidencia_valida` y `fn_evaluacion_evidencia_inmutable` y sus disparadores
+se incorporaron en `AddEvaluationEvidence`. El resto sigue pendiente de las tareas
 correspondientes, incluida
 `fn_catalogo_opciones`: los catálogos generales descritos arriba se resuelven hoy con consultas EF
 equivalentes porque las pruebas de integración corren sobre el proveedor en memoria, que no ejecuta

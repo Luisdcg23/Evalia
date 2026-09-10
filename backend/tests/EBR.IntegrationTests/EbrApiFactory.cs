@@ -1,6 +1,8 @@
+using EBR.Application.Evidence;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
@@ -13,7 +15,14 @@ public sealed class EbrApiFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
-        builder.ConfigureServices(services => services.RemoveAll<ILoggerProvider>());
+        builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<ILoggerProvider>();
+            // Las evidencias se guardan en un bucket en memoria: la suite ejerce la misma abstracción
+            // que producción sin depender de MinIO ni escribir binarios en disco.
+            services.RemoveAll<IEvidenceStorage>();
+            services.AddSingleton<IEvidenceStorage, InMemoryEvidenceStorage>();
+        });
         builder.ConfigureAppConfiguration((_, configuration) =>
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {

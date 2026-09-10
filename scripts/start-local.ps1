@@ -26,6 +26,10 @@ $minioExecutable = Join-Path $projectRoot "storage\minio\minio.exe"
 $minioData = Join-Path $projectRoot "storage\data"
 if (Test-Path -LiteralPath $minioExecutable) {
     New-Item -ItemType Directory -Force -Path $minioData | Out-Null
+    # MinIO toma sus credenciales de MINIO_ROOT_USER/MINIO_ROOT_PASSWORD. Sin definirlas arrancaría con
+    # las credenciales por omisión y rechazaría a la API, que se autentica con las de .env.
+    [Environment]::SetEnvironmentVariable("MINIO_ROOT_USER", $env:Minio__AccessKey, "Process")
+    [Environment]::SetEnvironmentVariable("MINIO_ROOT_PASSWORD", $env:Minio__SecretKey, "Process")
     $minio = Start-Process -FilePath $minioExecutable -ArgumentList @("server", $minioData, "--console-address", ":9001") -WorkingDirectory (Split-Path $minioExecutable) -WindowStyle Hidden -PassThru
     Set-Content -LiteralPath (Join-Path $runDirectory "minio.pid") -Value $minio.Id
 }

@@ -17,4 +17,5 @@ logs/
 .tmp-*
 .run/
 storage/data/
+storage/evidencias/
 storage/minio/minio.exe
