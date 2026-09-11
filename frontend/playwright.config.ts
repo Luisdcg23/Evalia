@@ -11,11 +11,11 @@ import { defineConfig, devices } from "@playwright/test";
  *      (ver README, "Siembra de catálogos normativos").
  *
  * Variables de entorno opcionales:
- *   E2E_BASE_URL  URL de la interfaz (por defecto http://localhost:5173).
+ *   E2E_BASE_URL  URL de la interfaz (por defecto http://localhost:5183).
  *   E2E_API_URL   URL de la API que consumen las specs y que se pasa a Vite (por defecto
  *                 http://localhost:5080).
  */
-const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:5173";
+const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:5183";
 const apiURL = process.env.E2E_API_URL ?? "http://localhost:5080";
 
 export default defineConfig({
@@ -38,7 +38,7 @@ export default defineConfig({
     { name: "webkit", use: { ...devices["Desktop Safari"] } },
   ],
   webServer: {
-    command: `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173 --strictPort`,
+    command: `node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5183 --strictPort`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

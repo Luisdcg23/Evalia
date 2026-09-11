@@ -148,7 +148,7 @@ Servicios locales:
 
 | Servicio | Dirección |
 |---|---|
-| Aplicación web | http://localhost:5173 |
+| Aplicación web | http://localhost:5183 |
 | API | http://localhost:5080 |
 | Salud de la API | http://localhost:5080/health |
 | Salud de PostgreSQL | http://localhost:5080/health/database |
