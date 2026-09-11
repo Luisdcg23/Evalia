@@ -168,6 +168,36 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   `PATCH /api/notifications/{id}/read`). El estado de lectura vive en el backend;
   la interfaz solo lo refleja.
 
+### Agregado
+
+- Pantalla de administración de plantillas de evaluación: listar, crear una
+  plantilla, construir su árbol de ítems (capítulo, sección, subsección,
+  agrupador, pregunta) mientras está en borrador, publicarla (con
+  confirmación explícita, porque deja de poder editarse) y crear una nueva
+  versión editable a partir de una publicada.
+- Pantalla del técnico evaluador para ejecutar la evaluación en campo:
+  iniciar la instancia sobre un expediente asignado y programado, responder
+  cada pregunta con observaciones y comentarios (guardado automático),
+  adjuntar evidencias por pregunta, ver el avance en tiempo real, enviar la
+  evaluación y consultar de inmediato el resultado calculado (porcentaje
+  BPM, calificación, nivel de riesgo y frecuencia). La misma pantalla ofrece
+  el formulario para emitir el informe y, si el coordinador solicitó una
+  corrección, muestra sus observaciones y permite emitir la siguiente
+  versión.
+- Formularios reales de registro y decisión de alertas sanitarias y
+  denuncias en el panel del coordinador, reemplazando los formularios y
+  botones que antes solo mostraban un aviso sin efecto.
+- Formulario de programación institucional de evaluaciones (origen sin
+  solicitud, alerta ni denuncia previa) en el panel del coordinador.
+- Envío real de la programación de una evaluación (fecha, motivo,
+  observaciones) desde la pantalla de asignación del coordinador, con
+  reprogramar y cancelar sobre una programación vigente.
+- Pantalla de revisión del informe en el panel del coordinador: ver el
+  contenido del informe junto al resultado calculado de la evaluación, y
+  aprobar, devolver o solicitar corrección con observaciones. Una vez
+  aprobado, generar y descargar el informe oficial en PDF, y cerrar el
+  expediente.
+
 ### Cambiado
 
 - Los paneles de técnico evaluador, coordinador, portal de empresa y
