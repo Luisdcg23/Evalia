@@ -101,6 +101,19 @@ Una versión publicada es inmutable. La invariante está duplicada: en la aplica
 cabecera, los ítems, las opciones, los criterios y las reglas de calificación. Solo se admite la
 transición `DRAFT` a `PUBLISHED`.
 
+`POST /api/evaluation-templates` siembra automáticamente las cuatro opciones evaluables estándar de
+la tabla de arriba (`C`/`CP`/`IT`/`NA`) al crear la plantilla: es el mismo contrato fijo, no una
+plantilla nueva de datos normativos. `POST .../{id}/publish` rechaza con `409` si el número de
+`Plantilla_Evaluacion_Regla` de la plantilla no coincide exactamente con el número de opciones del
+factor estructural `BPM` de la versión de reglas de riesgo publicada vigente (ver
+`RiskCatalogSeeder.BpmFactorCode`, hoy 4 opciones) — esa correspondencia posicional es la que usa
+`EvaluationSubmissionService.BpmFactorOptionAsync` para traducir la banda obtenida al factor BPM del
+cálculo de riesgo; si no coincidiera, el envío de cualquier evaluación de esa plantilla lanzaría una
+excepción no controlada. La validación solo se aplica si ya existe una versión de reglas publicada:
+si no existe ninguna, `StartAsync` ya bloquea el inicio de evaluaciones con su propio `409`, así que
+no hay riesgo de la excepción no controlada y no tiene sentido bloquear la publicación de plantillas
+contra un catálogo de riesgo que todavía no existe.
+
 ### Anomalías registradas de la ficha oficial
 
 No se corrigen ni se completan; se conservan tal como aparecen en la fuente.
@@ -361,21 +374,71 @@ vigente`.
 ## Ejecución de la evaluación y respuestas (RF-12, RF-13)
 
 `Evaluacion_Instancia` (`EvaluationInstance`) es la ejecución concreta de la ficha BPM sobre un
-expediente: liga `caso_id` con `plantilla_id`, la plantilla **publicada** vigente en el momento de
-iniciarse. `plantilla_id` se congela al crear la instancia — publicar una versión posterior de la
-familia no afecta evaluaciones ya iniciadas o enviadas, porque la instancia no sigue la familia
-(`familia_id`), sigue la versión concreta. Un índice único real `IX_Evaluacion_Instancia_caso_id`
-(`UNIQUE (caso_id)`) garantiza como máximo una instancia por caso; en la práctica nunca hace falta
-una segunda, porque el flujo del caso no permite volver a `SCHEDULED` (estado del que se inicia una
-evaluación) después de avanzar más allá de `IN_EVALUATION`.
+expediente: liga `caso_id` con `plantilla_id`, la plantilla **activa** en el momento de iniciarse
+(ver más abajo). `plantilla_id` se congela al crear la instancia — publicar u activar una versión
+posterior de la familia no afecta evaluaciones ya iniciadas o enviadas, porque la instancia no sigue
+la familia (`familia_id`), sigue la versión concreta. Un índice único real
+`IX_Evaluacion_Instancia_caso_id` (`UNIQUE (caso_id)`) garantiza como máximo una instancia por caso;
+en la práctica nunca hace falta una segunda, porque el flujo del caso no permite volver a
+`SCHEDULED` (estado del que se inicia una evaluación) después de avanzar más allá de
+`IN_EVALUATION`.
+
+### Plantilla activa (`Plantilla_Activa`)
 
 **Criterio de selección de plantilla (decisión documentada, el SRS no lo especifica)**: el modelo
 actual no asocia una empresa o un caso a una familia de plantilla concreta, así que
-`POST /api/cases/{id}/evaluations` elige la plantilla publicada más recientemente (por
-`fecha_publicacion` y, en empate, por identificador descendente) entre todas las familias
-publicadas. Si en el futuro conviven varias familias vigentes simultáneamente (por ejemplo por tipo
-de establecimiento), esto requeriría un catálogo de asociación empresa/caso → familia que hoy no
-existe en las fuentes; se documenta como limitación conocida en lugar de inventarlo.
+`POST /api/cases/{id}/evaluations` necesita un criterio explícito para elegir entre varias
+plantillas publicadas simultáneamente. **Hasta esta corrección** el criterio era "la publicada más
+recientemente" (por `fecha_publicacion` y, en empate, por identificador descendente); resultó
+inseguro en la práctica: cualquier plantilla de prueba publicada después de la ficha oficial pasaba
+a ser, sin ninguna acción explícita, la que usaban las evaluaciones nuevas. `Plantilla_Activa` es
+una tabla de una sola fila (`CK_Plantilla_Activa_Singleton`, `"Id" = 1`) que declara explícitamente
+cuál plantilla usa `StartAsync`:
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `Id` | `integer` | Siempre `1`; `CK_Plantilla_Activa_Singleton` impide una segunda fila. |
+| `plantilla_id` | `integer` | FK a `Plantilla_Evaluacion`, `ON DELETE RESTRICT`. |
+| `fecha_activacion` | `timestamptz` | Cuándo se activó. |
+| `activado_por` | `uuid`, nullable | Quién la activó; nulo cuando la fila la sembró la migración de datos (activación automática de la ficha oficial al desplegar, no un acto de un usuario). |
+
+Deliberadamente **no** está sujeta al disparador `tr_plantilla_publicada_inmutable`: activar una
+plantilla debe poder cambiar aunque la plantilla en cuestión ya esté `PUBLISHED` (de hecho solo
+plantillas publicadas pueden activarse), sin que eso viole la inmutabilidad de su contenido.
+
+`POST /api/evaluation-templates/{id}/activate` (rol `ADMINISTRADOR`) marca una plantilla como
+activa, reemplazando la anterior. Rechaza con `409` si:
+
+- La plantilla no está `PUBLISHED`.
+- El número de `Plantilla_Evaluacion_Regla` de la plantilla no coincide exactamente con el número
+  de opciones del factor estructural `BPM` de la versión de reglas de riesgo publicada vigente (ver
+  más abajo) — activar una plantilla que no cumple ese contrato dejaría sin calificación posible
+  cualquier evaluación que se envíe mientras esté activa.
+
+`GET /api/evaluation-templates/active` devuelve `{ templateId, activatedAt }` (`templateId: null` si
+nunca se ha activado ninguna).
+
+`POST /api/cases/{id}/evaluations` (`EvaluationInstanceEndpoints.StartAsync`) consulta
+`Plantilla_Activa` en vez de `fecha_publicacion`; si no hay ninguna fila, o la plantilla que apunta
+ya no está `PUBLISHED` (no debería ocurrir porque es inmutable, pero se valida igual), responde
+`409` con un mensaje explícito. **Contra PostgreSQL real la resolución ocurre dos veces, por el
+mismo patrón de "dos implementaciones paralelas" que documentan `fn_perfil_usuario` y
+`sp_asignar_tecnico`**: el endpoint la resuelve para congelar el resultado en la respuesta HTTP, y el
+procedimiento `sp_iniciar_evaluacion` —quien de verdad hace el `INSERT` en modo Postgres— la vuelve
+a resolver internamente desde `Plantilla_Activa` para no depender de que el llamador se la pase.
+Antes del arreglo, `sp_iniciar_evaluacion` tenía su propia copia del criterio roto
+(`ORDER BY fecha_publicacion DESC`), así que corregir solo el endpoint no bastaba: contra Postgres
+real el procedimiento seguía eligiendo la plantilla equivocada. Ambas implementaciones se
+verificaron manualmente y coinciden.
+
+**Migración de datos**: `AddActiveEvaluationTemplate` crea la tabla y activa la ficha oficial real
+resolviendo su id dinámicamente (`SELECT "Id" FROM "Plantilla_Evaluacion" WHERE nombre =
+'Ficha de Inspección BPM' AND estado = 'PUBLISHED' ORDER BY version DESC LIMIT 1`), nunca con un id
+fijo. Si esa fila no existe todavía (por ejemplo, un despliegue nuevo que aplica las migraciones
+antes de importar la ficha), la migración no inserta nada: `Plantilla_Activa` queda vacía y
+`StartAsync` responde `409` hasta que un administrador active una plantilla — comportamiento
+correcto, no un error de la migración. `FixStartEvaluationUsesActiveTemplate` redefine
+`sp_iniciar_evaluacion` para que use `Plantilla_Activa` en vez de `fecha_publicacion`.
 
 `POST /api/cases/{id}/evaluations` (rol `TECNICO_EVALUADOR`, no `ADMINISTRADOR`/`COORDINADOR` —
 ver más abajo):
@@ -917,9 +980,10 @@ Procedimientos transaccionales:
   agenda de evaluaciones (RF-07, RF-11)" para la dualidad con el endpoint y el límite conocido de la
   validación de solapamiento.
 - `sp_iniciar_evaluacion(caso_id, usuario_id, version_regla_id)` crea la instancia de evaluación
-  contra la plantilla publicada más reciente y la versión de reglas indicada, validando que quien
-  inicia sea el técnico con asignación vigente, transiciona el caso a `IN_EVALUATION` y registra su
-  historial, todo en una sola transacción.
+  contra la plantilla activa (`Plantilla_Activa`, no "la publicada más reciente" — ver sección
+  "Plantilla activa" arriba) y la versión de reglas indicada, validando que quien inicia sea el
+  técnico con asignación vigente, transiciona el caso a `IN_EVALUATION` y registra su historial,
+  todo en una sola transacción.
 - `sp_guardar_respuestas(instancia_id, item_id, opcion, observaciones, comentarios, usuario_id)`
   guarda una respuesta con `INSERT ... ON CONFLICT (instancia_id, item_id) DO UPDATE`, de modo que
   reguardar la misma pregunta actualiza la fila en lugar de duplicarla; valida que la instancia no
@@ -1023,7 +1087,7 @@ dotnet ef database update `
   --startup-project "backend\src\EBR.Api\EBR.Api.csproj"
 ```
 
-Las 20 migraciones aplican limpio sobre una base vacía y dejan 54 tablas, 27 rutinas `sp_`/`fn_` y
+Las 22 migraciones aplican limpio sobre una base vacía y dejan 55 tablas, 27 rutinas `sp_`/`fn_` y
 21 disparadores. Comprobación del estado:
 
 ```powershell
@@ -1063,7 +1127,7 @@ JOIN pg_class c ON c.oid = t.tgrelid
 WHERE NOT t.tgisinternal AND t.tgname LIKE 'tr\_%'
 ORDER BY c.relname, t.tgname;
 
--- Conteo de tablas del esquema public (se esperan 54)
+-- Conteo de tablas del esquema public (se esperan 55)
 SELECT count(*) FROM information_schema.tables
 WHERE table_schema = 'public' AND table_type = 'BASE TABLE';
 
@@ -1074,8 +1138,12 @@ SELECT "MigrationId" FROM "__EFMigrationsHistory" ORDER BY "MigrationId" DESC LI
 SELECT id, version, publicado, activo, vigente_desde, vigente_hasta
 FROM "Version_Regla_Riesgo" ORDER BY version DESC;
 
--- ¿Está publicada la plantilla BPM? (necesaria para iniciar evaluaciones)
-SELECT id, nombre, estado, fecha_publicacion FROM "Plantilla_Evaluacion";
+-- ¿Cuál plantilla está publicada? (informativo)
+SELECT "Id", nombre, estado, fecha_publicacion FROM "Plantilla_Evaluacion" ORDER BY "Id";
+
+-- ¿Cuál plantilla es la ACTIVA? (la que de verdad usa StartAsync para iniciar evaluaciones)
+SELECT pa.plantilla_id, pe.nombre, pe.estado, pa.fecha_activacion
+FROM "Plantilla_Activa" pa JOIN "Plantilla_Evaluacion" pe ON pe."Id" = pa.plantilla_id;
 ```
 
 Salud de la API y de la conexión a la base:

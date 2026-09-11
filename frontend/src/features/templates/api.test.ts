@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createTemplate, createTemplateItem, createTemplateVersion, deleteTemplateItem,
-  listTemplateItems, listTemplates, publishTemplate, updateTemplateItem,
+  activateTemplate, createTemplate, createTemplateItem, createTemplateVersion, deleteTemplateItem,
+  getActiveTemplate, listTemplateItems, listTemplates, publishTemplate, updateTemplateItem,
 } from "./api";
 
 describe("evaluation templates API", () => {
@@ -195,5 +195,52 @@ describe("evaluation templates API", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 409, json: async () => ({}) }));
 
     await expect(createTemplateVersion("token-local", 9)).rejects.toThrow(/solo una versión publicada puede clonarse/i);
+  });
+
+  it("reads which template is active", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ templateId: 3, activatedAt: "2026-09-11T01:14:46Z" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const active = await getActiveTemplate("token-local");
+
+    expect(active.templateId).toBe(3);
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:5080/api/evaluation-templates/active", {
+      headers: { Authorization: "Bearer token-local" },
+    });
+  });
+
+  it("reports no active template as templateId null", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ templateId: null, activatedAt: null }),
+    }));
+
+    const active = await getActiveTemplate("token-local");
+
+    expect(active.templateId).toBeNull();
+  });
+
+  it("activates a published template with no request body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true, json: async () => ({ templateId: 9, activatedAt: "2026-09-11T02:00:00Z" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const activated = await activateTemplate("token-local", 9);
+
+    expect(activated.templateId).toBe(9);
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:5080/api/evaluation-templates/9/activate", {
+      method: "POST",
+      headers: { Authorization: "Bearer token-local" },
+    });
+  });
+
+  it("maps a 409 on activation (unpublished or band mismatch) to the backend's message", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false, status: 409, json: async () => ({ message: "Solo una plantilla publicada puede activarse para evaluaciones." }),
+    }));
+
+    await expect(activateTemplate("token-local", 9)).rejects.toThrow(/solo una plantilla publicada puede activarse/i);
   });
 });

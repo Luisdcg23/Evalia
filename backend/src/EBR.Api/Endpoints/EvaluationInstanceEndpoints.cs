@@ -43,11 +43,14 @@ public static class EvaluationInstanceEndpoints
     /// el que la máquina de estados permita transicionar a <see cref="CaseStatuses.InEvaluation"/>
     /// (en la práctica, <c>SCHEDULED</c>). <strong>Criterio de selección de plantilla</strong>: el SRS
     /// no define cómo elegir entre varias familias de plantillas publicadas simultáneamente y el
-    /// modelo actual no asocia una empresa o un caso a una familia concreta, así que se elige la
-    /// plantilla publicada más recientemente (por <c>fecha_publicacion</c> y, en empate, por
-    /// identificador descendente) entre todas las familias. Documentado también en
-    /// <c>DATABASE.md</c>. Solo puede existir una instancia por caso (índice único
-    /// <c>caso_id</c> en <c>Evaluacion_Instancia</c>): un segundo intento responde <c>409</c>.
+    /// modelo actual no asocia una empresa o un caso a una familia concreta, así que se usa la
+    /// plantilla marcada explícitamente como activa (<see cref="ActiveEvaluationTemplate"/>,
+    /// tabla <c>Plantilla_Activa</c>, administrada con
+    /// <c>POST /api/evaluation-templates/{id}/activate</c>) en vez de "la publicada más
+    /// recientemente": varias plantillas de prueba publicadas después de la oficial harían que ese
+    /// criterio por fecha eligiera la equivocada. Documentado también en <c>DATABASE.md</c>. Solo puede
+    /// existir una instancia por caso (índice único <c>caso_id</c> en <c>Evaluacion_Instancia</c>): un
+    /// segundo intento responde <c>409</c>.
     /// </summary>
     private static async Task<IResult> StartAsync(
         int id,
@@ -80,13 +83,29 @@ public static class EvaluationInstanceEndpoints
         if (!CaseStateMachine.CanTransition(inspectionCase.Status, CaseStatuses.InEvaluation))
             return Results.Conflict(new { message = $"No se permite iniciar una evaluación desde el estado {inspectionCase.Status}." });
 
+        var activeTemplateId = await context.ActiveEvaluationTemplates.AsNoTracking()
+            .Where(value => value.Id == ActiveEvaluationTemplate.SingletonId)
+            .Select(value => (int?)value.TemplateId)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (activeTemplateId is null)
+        {
+            return Results.Conflict(new
+            {
+                message = "No hay una plantilla de evaluación activa. Un administrador debe activar una plantilla " +
+                    "publicada en /api/evaluation-templates/{id}/activate antes de iniciar evaluaciones."
+            });
+        }
+
         var template = await context.EvaluationTemplates.AsNoTracking()
-            .Where(value => value.Status == EvaluationTemplateStatuses.Published)
-            .OrderByDescending(value => value.PublishedAt)
-            .ThenByDescending(value => value.Id)
-            .FirstOrDefaultAsync(cancellationToken);
-        if (template is null)
-            return Results.Conflict(new { message = "No existe una plantilla de evaluación publicada." });
+            .SingleOrDefaultAsync(value => value.Id == activeTemplateId.Value, cancellationToken);
+        if (template is null || template.Status != EvaluationTemplateStatuses.Published)
+        {
+            return Results.Conflict(new
+            {
+                message = "La plantilla activa ya no está publicada. Un administrador debe activar otra plantilla " +
+                    "publicada antes de iniciar evaluaciones."
+            });
+        }
 
         // La instancia congela la versión de reglas de riesgo con la que se calificará al enviarla, para
         // que publicar otra versión durante la inspección no cambie el resultado de esta evaluación.

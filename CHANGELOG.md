@@ -196,6 +196,23 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   heredada que operaba sobre `puntaje_total` sin versión de reglas: el motor
   solo calcula contra una versión publicada y vigente.
 
+### Corregido
+
+- El inicio de una evaluación (`POST /api/cases/{id}/evaluations`) elegía la
+  plantilla publicada más recientemente en todo el sistema, sin distinguir
+  cuál es la ficha oficial vigente: cualquier plantilla de prueba publicada
+  después de ella pasaba a usarse por error. Se introduce un concepto
+  explícito de plantilla activa (`Plantilla_Activa`) y un nuevo endpoint
+  `POST /api/evaluation-templates/{id}/activate` (rol administrador) que la
+  marca; el criterio por fecha de publicación se elimina también del
+  procedimiento `sp_iniciar_evaluacion`.
+- Crear una plantilla de evaluación siembra automáticamente las cuatro
+  opciones evaluables estándar de la ficha BPM (Cumple / Cumplimiento parcial
+  / Incumplimiento total / No aplica), y publicarla valida que el número de
+  bandas de calificación declaradas coincida con el número de opciones del
+  factor de riesgo estructural BPM vigente, para evitar dejar publicada una
+  plantilla que no se pueda calificar al enviar una evaluación.
+
 ## [0.1.0] - 2026-09-08
 
 ### Agregado

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  createTemplate, createTemplateItem, createTemplateVersion, deleteTemplateItem,
-  listTemplateItems, listTemplates, publishTemplate, updateTemplateItem,
+  activateTemplate, createTemplate, createTemplateItem, createTemplateVersion, deleteTemplateItem,
+  getActiveTemplate, listTemplateItems, listTemplates, publishTemplate, updateTemplateItem,
   type EvaluationTemplate, type EvaluationTemplateItem, type UpsertTemplateItemInput,
 } from "./api";
 import { allowedChildTypes, buildItemTree, flattenTree, isValidItemType, TEMPLATE_ITEM_TYPE_LABEL } from "./hierarchy";
@@ -100,8 +100,14 @@ export default function TemplateAdmin({ accessToken }: { accessToken: string }) 
   const [publishing, setPublishing] = useState(false);
   const [creatingVersion, setCreatingVersion] = useState(false);
 
+  const [activeTemplateId, setActiveTemplateId] = useState<number | null>(null);
+  const [activeLoading, setActiveLoading] = useState(true);
+  const [activeError, setActiveError] = useState("");
+  const [activating, setActivating] = useState(false);
+
   const selected = templates.find(item => item.id === selectedId) ?? null;
   const isDraft = selected?.status === "DRAFT";
+  const isActive = selected !== null && selected.id === activeTemplateId;
 
   const tree = useMemo(() => buildItemTree(items), [items]);
   const flat = useMemo(() => flattenTree(tree), [tree]);
@@ -120,6 +126,21 @@ export default function TemplateAdmin({ accessToken }: { accessToken: string }) 
   }, [accessToken]);
 
   useEffect(() => { void refreshTemplates(); }, [refreshTemplates]);
+
+  const refreshActive = useCallback(async () => {
+    setActiveLoading(true);
+    setActiveError("");
+    try {
+      const result = await getActiveTemplate(accessToken);
+      setActiveTemplateId(result.templateId);
+    } catch (error) {
+      setActiveError(error instanceof Error ? error.message : "No fue posible consultar la plantilla activa.");
+    } finally {
+      setActiveLoading(false);
+    }
+  }, [accessToken]);
+
+  useEffect(() => { void refreshActive(); }, [refreshActive]);
 
   const refreshItems = useCallback(async (templateId: number) => {
     setItemsLoading(true);
@@ -253,6 +274,20 @@ export default function TemplateAdmin({ accessToken }: { accessToken: string }) 
     }
   };
 
+  const handleActivate = async () => {
+    if (!selected) return;
+    setActivating(true);
+    setActionError("");
+    try {
+      const result = await activateTemplate(accessToken, selected.id);
+      setActiveTemplateId(result.templateId);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "No fue posible activar la plantilla.");
+    } finally {
+      setActivating(false);
+    }
+  };
+
   const handleCreateVersion = async () => {
     if (!selected) return;
     setCreatingVersion(true);
@@ -334,6 +369,11 @@ export default function TemplateAdmin({ accessToken }: { accessToken: string }) 
                       <span style={{ padding: "2px 8px", borderRadius: 99, background: `${meta.color}22`, border: `1px solid ${meta.color}55`, color: meta.color, fontWeight: 700 }}>
                         {meta.label}
                       </span>
+                      {template.id === activeTemplateId && (
+                        <span style={{ padding: "2px 8px", borderRadius: 99, background: `${T.cyan}22`, border: `1px solid ${T.cyan}55`, color: T.cyan, fontWeight: 700 }}>
+                          Activa para evaluaciones
+                        </span>
+                      )}
                     </span>
                   </button>
                 );
@@ -384,6 +424,32 @@ export default function TemplateAdmin({ accessToken }: { accessToken: string }) 
                     </button>
                   </div>
                 )}
+
+                {selected.status === "PUBLISHED" && (
+                  <div style={{
+                    padding: "12px 14px", borderRadius: 12,
+                    background: isActive ? "rgba(59,246,229,0.08)" : "rgba(148,163,184,0.08)",
+                    border: `1px solid ${isActive ? `${T.cyan}55` : T.border}`,
+                    display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10,
+                  }}>
+                    <p style={{ fontSize: "0.78rem", color: isActive ? T.cyan : T.txtMuted, fontWeight: isActive ? 700 : 400 }}>
+                      {isActive
+                        ? "Esta es la plantilla activa: las evaluaciones nuevas que inicien los técnicos usan esta versión."
+                        : "Esta versión está publicada pero no es la plantilla activa: las evaluaciones nuevas no la usan hasta que se active."}
+                    </p>
+                    {!isActive && (
+                      <button
+                        type="button"
+                        onClick={() => void handleActivate()}
+                        disabled={activating || activeLoading}
+                        style={{ ...primaryButton, opacity: activating || activeLoading ? 0.6 : 1 }}
+                      >
+                        {activating ? "Activando…" : "Activar para evaluaciones"}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {activeError && <p role="alert" style={errorBanner}>{activeError}</p>}
 
                 {isDraft && !confirmingPublish && (
                   <button type="button" onClick={() => setConfirmingPublish(true)} disabled={items.length === 0} style={{ ...primaryButton, opacity: items.length === 0 ? 0.5 : 1, alignSelf: "flex-start" }}>

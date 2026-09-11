@@ -319,18 +319,8 @@ public sealed class EvaluationEvidenceEndpointTests : IClassFixture<EbrApiFactor
         using (var scope = _factory.Services.CreateScope())
         {
             var context = scope.ServiceProvider.GetRequiredService<EbrDbContext>();
-            foreach (var option in BpmResponseOptions.All)
-            {
-                context.EvaluationResponseOptions.Add(new EvaluationResponseOption
-                {
-                    TemplateId = template.Id,
-                    Code = option.Code,
-                    Name = option.Name,
-                    Value = option.Value,
-                    CountsTowardDenominator = option.CountsTowardDenominator
-                });
-            }
-
+            // Las opciones evaluables (C/CP/IT/NA) ya las siembra `EvaluationTemplateEndpoints.CreateAsync`
+            // al crear la plantilla; aquí solo faltan las bandas de calificación.
             var order = 0;
             foreach (var band in BpmTemplateData.QualificationBands)
             {
@@ -353,6 +343,9 @@ public sealed class EvaluationEvidenceEndpointTests : IClassFixture<EbrApiFactor
         }
 
         await PostJsonAsync<TemplateResponse>($"/api/evaluation-templates/{template.Id}/publish", null, adminToken);
+        // StartAsync ya no elige "la publicada más recientemente": hay que activarla explícitamente
+        // para que las evaluaciones de esta prueba usen la plantilla que se acaba de construir.
+        await PostJsonAsync<object>($"/api/evaluation-templates/{template.Id}/activate", null, adminToken);
         return itemIds;
     }
 

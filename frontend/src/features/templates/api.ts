@@ -12,6 +12,12 @@ export interface EvaluationTemplate {
   publishedAt?: string | null;
 }
 
+/** Respuesta de `GET/POST .../active` y `.../activate`: cuál plantilla usa hoy `StartAsync`. */
+export interface ActiveEvaluationTemplate {
+  templateId: number | null;
+  activatedAt: string | null;
+}
+
 export interface EvaluationTemplateItem {
   id: number;
   templateId: number;
@@ -185,6 +191,29 @@ export async function publishTemplate(accessToken: string, templateId: number): 
     throw new Error(await readErrorMessage(response, "No fue posible publicar la plantilla."));
   }
   return response.json() as Promise<EvaluationTemplate>;
+}
+
+export async function getActiveTemplate(accessToken: string): Promise<ActiveEvaluationTemplate> {
+  const response = await fetch(`${baseUrl}/api/evaluation-templates/active`, { headers: authHeaders(accessToken) });
+  if (!response.ok) throw new Error(await readErrorMessage(response, "No fue posible consultar la plantilla activa."));
+  return response.json() as Promise<ActiveEvaluationTemplate>;
+}
+
+export async function activateTemplate(accessToken: string, templateId: number): Promise<ActiveEvaluationTemplate> {
+  const response = await fetch(`${baseUrl}/api/evaluation-templates/${templateId}/activate`, {
+    method: "POST",
+    headers: authHeaders(accessToken),
+  });
+  if (!response.ok) {
+    if (response.status === 404) throw new Error("La plantilla no existe.");
+    if (response.status === 409) {
+      throw new Error(await readErrorMessage(
+        response, "No fue posible activar la plantilla: debe estar publicada y cumplir el contrato de bandas de calificación.",
+      ));
+    }
+    throw new Error(await readErrorMessage(response, "No fue posible activar la plantilla."));
+  }
+  return response.json() as Promise<ActiveEvaluationTemplate>;
 }
 
 export async function createTemplateVersion(accessToken: string, templateId: number): Promise<EvaluationTemplate> {

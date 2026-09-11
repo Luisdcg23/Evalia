@@ -45,6 +45,7 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
     public DbSet<EvaluationResponseOption> EvaluationResponseOptions => Set<EvaluationResponseOption>();
     public DbSet<EvaluationGuidanceCriterion> EvaluationGuidanceCriteria => Set<EvaluationGuidanceCriterion>();
     public DbSet<EvaluationQualificationRule> EvaluationQualificationRules => Set<EvaluationQualificationRule>();
+    public DbSet<ActiveEvaluationTemplate> ActiveEvaluationTemplates => Set<ActiveEvaluationTemplate>();
     public DbSet<EvaluationImportBatch> EvaluationImportBatches => Set<EvaluationImportBatch>();
     public DbSet<EvaluationImportRow> EvaluationImportRows => Set<EvaluationImportRow>();
     public DbSet<BpmRequest> BpmRequests => Set<BpmRequest>();
@@ -860,6 +861,17 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
             entity.Property(item => item.MaxPercentage).HasColumnName("porcentaje_max").HasPrecision(5, 2);
             entity.Property(item => item.MaxIncluded).HasColumnName("maximo_incluido");
             entity.Property(item => item.Order).HasColumnName("orden");
+            entity.HasOne<EvaluationTemplate>().WithMany().HasForeignKey(item => item.TemplateId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<ActiveEvaluationTemplate>(entity =>
+        {
+            entity.ToTable("Plantilla_Activa", table => table.HasCheckConstraint(
+                "CK_Plantilla_Activa_Singleton", "\"Id\" = 1"));
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.Id).ValueGeneratedNever();
+            entity.Property(item => item.TemplateId).HasColumnName("plantilla_id");
+            entity.Property(item => item.ActivatedAt).HasColumnName("fecha_activacion");
+            entity.Property(item => item.ActivatedBy).HasColumnName("activado_por");
             entity.HasOne<EvaluationTemplate>().WithMany().HasForeignKey(item => item.TemplateId).OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<EvaluationImportBatch>(entity =>

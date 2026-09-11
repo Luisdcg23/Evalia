@@ -57,6 +57,31 @@ public sealed class EvaluationInstanceEndpointTests : IClassFixture<EbrApiFactor
     }
 
     [Fact]
+    public async Task StartUsesTheExplicitlyActivatedTemplateNotTheMostRecentlyPublished()
+    {
+        var coordinatorToken = await LoginAsync("coordinador@ebr.local");
+        var adminToken = await LoginAsync("admin@ebr.local");
+        var technicianId = await GetUserIdAsync("tecnico@ebr.local");
+        var technicianToken = await LoginAsync("tecnico@ebr.local");
+
+        var (activatedTemplateId, _) = await CreatePublishedTemplateWithIdAsync(1);
+
+        // Se publica una plantilla más nueva DESPUÉS de activar la primera y deliberadamente no se
+        // activa: si StartAsync todavía eligiera "la publicada más recientemente" (el criterio anterior
+        // a este arreglo), tomaría esta por error.
+        var (laterPublishedTemplateId, _) = await CreateAndPublishTemplateAsync(1);
+        Assert.True(laterPublishedTemplateId > activatedTemplateId);
+
+        var active = await GetJsonAsync<ActiveTemplateResponse>("/api/evaluation-templates/active", adminToken);
+        Assert.Equal(activatedTemplateId, active.TemplateId);
+
+        var caseId = await CreateScheduledCaseAsync(coordinatorToken, technicianId);
+        var instance = await PostJsonAsync<InstanceResponse>($"/api/cases/{caseId}/evaluations", null, technicianToken);
+
+        Assert.Equal(activatedTemplateId, instance.TemplateId);
+    }
+
+    [Fact]
     public async Task DifferentTechnicianCannotStartEvaluation()
     {
         var coordinatorToken = await LoginAsync("coordinador@ebr.local");
@@ -385,7 +410,27 @@ public sealed class EvaluationInstanceEndpointTests : IClassFixture<EbrApiFactor
         return created.Id;
     }
 
-    private async Task<List<int>> CreatePublishedTemplateAsync(int questionCount)
+    /// <summary>
+    /// Crea, seedea bandas, publica y <strong>activa</strong> una plantilla nueva de prueba, para que
+    /// <c>StartAsync</c> la use (desde el arreglo de la plantilla activa, ya no elige "la publicada más
+    /// recientemente"). La mayoría de las pruebas de este archivo quieren exactamente eso: su propia
+    /// plantilla recién creada, aislada de las demás. La única excepción es la prueba de activación
+    /// explícita, que usa <see cref="CreateAndPublishTemplateAsync"/> directamente para poder dejar una
+    /// plantilla publicada sin activar.
+    /// </summary>
+    private async Task<List<int>> CreatePublishedTemplateAsync(int questionCount) =>
+        (await CreatePublishedTemplateWithIdAsync(questionCount)).ItemIds;
+
+    private async Task<(int TemplateId, List<int> ItemIds)> CreatePublishedTemplateWithIdAsync(int questionCount)
+    {
+        var (templateId, itemIds) = await CreateAndPublishTemplateAsync(questionCount);
+        var adminToken = await LoginAsync("admin@ebr.local");
+        await PostJsonAsync<ActiveTemplateResponse>($"/api/evaluation-templates/{templateId}/activate", null, adminToken);
+        return (templateId, itemIds);
+    }
+
+    /// <summary>Crea, seedea bandas y publica una plantilla de prueba, pero deliberadamente no la activa.</summary>
+    private async Task<(int TemplateId, List<int> ItemIds)> CreateAndPublishTemplateAsync(int questionCount)
     {
         await EnsureRiskCatalogAsync();
         var adminToken = await LoginAsync("admin@ebr.local");
@@ -411,24 +456,13 @@ public sealed class EvaluationInstanceEndpointTests : IClassFixture<EbrApiFactor
             itemIds.Add(item.Id);
         }
 
-        // Las opciones evaluables (C/CP/IT/NA) se declaran mientras la plantilla sigue en DRAFT: no
-        // hay un endpoint de administración para ellas (en producción las crea
-        // `sp_importar_plantilla_bpm`) y una vez PUBLISHED quedan bloqueadas por
-        // `EbrDbContext.EnforceTemplateInvariants`, igual que los ítems.
+        // Las opciones evaluables (C/CP/IT/NA) ya las siembra automáticamente
+        // `EvaluationTemplateEndpoints.CreateAsync` al crear la plantilla (contrato fijo de
+        // `BpmResponseOptions`); aquí solo faltan las bandas de calificación, que sí son específicas de
+        // cada plantilla y no tienen valor por defecto.
         using (var scope = _factory.Services.CreateScope())
         {
             var context = scope.ServiceProvider.GetRequiredService<EbrDbContext>();
-            foreach (var option in BpmResponseOptions.All)
-            {
-                context.EvaluationResponseOptions.Add(new EvaluationResponseOption
-                {
-                    TemplateId = template.Id,
-                    Code = option.Code,
-                    Name = option.Name,
-                    Value = option.Value,
-                    CountsTowardDenominator = option.CountsTowardDenominator
-                });
-            }
 
             // Las bandas de calificación son las de la ficha oficial (BpmTemplateData): el resultado
             // clasifica el porcentaje contra lo que declara la plantilla, no contra umbrales fijos.
@@ -455,7 +489,7 @@ public sealed class EvaluationInstanceEndpointTests : IClassFixture<EbrApiFactor
 
         await PostJsonAsync<TemplateResponse>($"/api/evaluation-templates/{template.Id}/publish", null, adminToken);
 
-        return itemIds;
+        return (template.Id, itemIds);
     }
 
     private async Task EnsureRiskCatalogAsync()
@@ -566,6 +600,7 @@ public sealed class EvaluationInstanceEndpointTests : IClassFixture<EbrApiFactor
     private sealed record MeResponse(Guid Id, string Email, string FullName, string Role);
     private sealed record TemplateResponse(int Id, string Name, int Version, string Status);
     private sealed record TemplateItemResponse(int Id, int TemplateId, string Code);
+    private sealed record ActiveTemplateResponse(int? TemplateId, DateTimeOffset? ActivatedAt);
 
     private sealed record InstanceResponse(
         int Id, int CaseId, int TemplateId, string Status,
