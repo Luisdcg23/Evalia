@@ -7,6 +7,7 @@ import { listAlerts, type HealthAlert } from "./features/alerts/api";
 import { listComplaints, type Complaint } from "./features/complaints/api";
 import { getPendingUsers, type PendingUser } from "./auth/api";
 import NotificationsBell from "./features/notifications/NotificationsBell";
+import TemplateAdmin from "./features/templates/TemplateAdmin";
 
 /* ── Breakpoint hook ─────────────────────────────────────── */
 function useWidth() {
@@ -88,6 +89,7 @@ const navItems = [
   { id: "cal",     label: "Calendario",    icon: calIcon      },
   { id: "alert",   label: "Alertas",       icon: warnIcon     },
   { id: "rep",     label: "Reportes",      icon: chartIcon    },
+  { id: "plant",   label: "Plantillas",    icon: clipIcon     },
   { id: "cfg",     label: "Configuración", icon: gearIcon     },
 ];
 
@@ -725,7 +727,7 @@ export default function ResponsiveDashboard({ onBack, user, accessToken = "", on
 
   const SECTION_TITLE: Record<string, string> = {
     dash: "Dashboard Admin", empresa: "Mi Empresa", eval: "Evaluaciones",
-    cal: "Calendario", alert: "Alertas", rep: "Reportes", cfg: "Configuración",
+    cal: "Calendario", alert: "Alertas", rep: "Reportes", plant: "Plantillas de evaluación", cfg: "Configuración",
   };
 
   const count = (status: string) => metrics?.byStatus.find(s => s.status === status)?.count ?? 0;
@@ -938,6 +940,7 @@ export default function ResponsiveDashboard({ onBack, user, accessToken = "", on
           {activeNav === "cal" && <CalendarioSection isMobile={isMobile} schedule={schedule} loading={opsLoading} error={opsError} />}
           {activeNav === "alert" && <AlertasSection isMobile={isMobile} alerts={alerts} complaints={complaints} companies={companies} loading={opsLoading} error={opsError} />}
           {activeNav === "rep" && <ReportesSection isMobile={isMobile} metrics={metrics} cases={cases} loading={opsLoading} />}
+          {activeNav === "plant" && <TemplateAdmin accessToken={accessToken} />}
           {activeNav === "cfg" && <ConfiguracionSection isMobile={isMobile} onLogout={onBack} onUserValidation={onUserValidation} pendingUsers={pendingUsers} pendingLoading={pendingLoading} pendingError={pendingError} />}
 
         </div>
