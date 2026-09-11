@@ -1,3 +1,4 @@
+using EBR.Application.Email;
 using EBR.Application.Identity;
 using EBR.Domain.Identity;
 using EBR.Infrastructure.Identity;
@@ -11,7 +12,7 @@ using EBR.Infrastructure.Persistence;
 
 namespace EBR.Api.Endpoints;
 
-public static class AuthEndpoints
+public static partial class AuthEndpoints
 {
     public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -151,6 +152,8 @@ public static class AuthEndpoints
         UserManager<ApplicationUser> userManager,
         EbrDbContext context,
         IWebHostEnvironment environment,
+        IEmailSender emailSender,
+        ILogger<Program> logger,
         CancellationToken cancellationToken)
     {
         var email = request.Email.Trim().ToLowerInvariant();
@@ -176,6 +179,23 @@ public static class AuthEndpoints
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10)
             });
             await context.SaveChangesAsync(cancellationToken);
+
+            // El correo es un canal externo: si el proveedor falla, no debe tumbar la recuperación de
+            // contraseña ni delatar por su respuesta si la cuenta existe. En Development/Testing el
+            // código igual se devuelve en el cuerpo de la respuesta para poder probar sin bandeja real.
+            try
+            {
+                await emailSender.SendAsync(
+                    email,
+                    "Recuperación de contraseña — Evalia",
+                    $"Tu código de recuperación es {recoveryCode}. Vence en 10 minutos. " +
+                    "Si no solicitaste este cambio, ignora este mensaje.",
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                LogRecoveryEmailFailed(logger, ex);
+            }
         }
 
         return Results.Accepted(value: new
@@ -252,6 +272,9 @@ public static class AuthEndpoints
 
     private static string HashRecoveryCode(Guid userId, string code) => Convert.ToHexString(
         SHA256.HashData(Encoding.UTF8.GetBytes($"{userId:N}:{code}")));
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "No fue posible enviar el correo de recuperación de contraseña.")]
+    private static partial void LogRecoveryEmailFailed(ILogger logger, Exception ex);
 
     private sealed record LoginRequest(string Email, string Password);
 

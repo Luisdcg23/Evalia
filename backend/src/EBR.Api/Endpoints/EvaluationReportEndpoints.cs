@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
+using EBR.Application.Email;
 using EBR.Application.Evidence;
 using EBR.Application.Reports;
 using EBR.Domain.Evaluations;
@@ -198,6 +199,8 @@ public static class EvaluationReportEndpoints
         ReviewReportRequest request,
         ClaimsPrincipal principal,
         EbrDbContext context,
+        IEmailSender emailSender,
+        ILogger<Program> logger,
         CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var actingUserId))
@@ -280,7 +283,7 @@ public static class EvaluationReportEndpoints
                 .Select(x => x.UserId).ToListAsync(cancellationToken)
             : await context.CaseAssignments.AsNoTracking().Where(x => x.CaseId == inspectionCase.Id && x.IsCurrent)
                 .Select(x => x.TechnicianId).ToListAsync(cancellationToken);
-        await AddNotificationsAsync(context, recipients,
+        await AddNotificationsAsync(context, emailSender, logger, recipients,
             approves ? NotificationTypes.ReportApproved : NotificationTypes.ReportCorrectionRequested,
             approves ? "Informe aprobado" : "Corrección de informe solicitada",
             approves ? $"El informe del expediente {inspectionCase.Id} fue aprobado."
@@ -368,6 +371,7 @@ public static class EvaluationReportEndpoints
 
     private static async Task<IResult> CloseCaseAsync(
         int id, CloseCaseRequest request, ClaimsPrincipal principal, EbrDbContext context,
+        IEmailSender emailSender, ILogger<Program> logger,
         CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var actingUserId))
@@ -418,16 +422,18 @@ public static class EvaluationReportEndpoints
         var closure = await context.CaseClosures.AsNoTracking().SingleAsync(value => value.CaseId == id, cancellationToken);
         var recipients = await context.CompanyUsers.AsNoTracking().Where(x => x.CompanyId == inspectionCase.CompanyId)
             .Select(x => x.UserId).ToListAsync(cancellationToken);
-        await AddNotificationsAsync(context, recipients, NotificationTypes.CaseClosed,
+        await AddNotificationsAsync(context, emailSender, logger, recipients, NotificationTypes.CaseClosed,
             "Expediente cerrado", $"El expediente {id} fue cerrado oficialmente.", id,
             $"case-closure:{closure.Id}", cancellationToken);
         return Results.Ok(DescribeClosure(closure));
     }
 
     private static async Task AddNotificationsAsync(
-        EbrDbContext context, IEnumerable<Guid> recipients, string type, string title, string message,
-        int caseId, string operationPrefix, CancellationToken cancellationToken)
+        EbrDbContext context, IEmailSender emailSender, ILogger<Program> logger, IEnumerable<Guid> recipients,
+        string type, string title, string message, int caseId, string operationPrefix,
+        CancellationToken cancellationToken)
     {
+        var newRecipients = new List<Guid>();
         foreach (var recipient in recipients.Distinct())
         {
             var operationId = $"{operationPrefix}:{recipient}";
@@ -442,8 +448,16 @@ public static class EvaluationReportEndpoints
                 ReferenceId = caseId,
                 OperationId = operationId
             });
+            newRecipients.Add(recipient);
         }
         await context.SaveChangesAsync(cancellationToken);
+
+        // El correo es un complemento de la notificación in-app: solo se envía a quien recibió una
+        // notificación nueva, y un proveedor SMTP caído no puede bloquear la revisión ni el cierre.
+        foreach (var recipient in newRecipients)
+        {
+            await CaseEndpoints.SendNotificationEmailAsync(context, emailSender, logger, recipient, title, message, cancellationToken);
+        }
     }
 
     /// <summary>

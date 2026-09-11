@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using EBR.Application.Email;
 using EBR.Domain.Identity;
 using EBR.Domain.Workflow;
 using EBR.Infrastructure.Identity;
@@ -8,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace EBR.Api.Endpoints;
 
-public static class CaseEndpoints
+public static partial class CaseEndpoints
 {
     public static IEndpointRouteBuilder MapCaseEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -152,6 +153,8 @@ public static class CaseEndpoints
         ClaimsPrincipal principal,
         EbrDbContext context,
         UserManager<ApplicationUser> userManager,
+        IEmailSender emailSender,
+        ILogger<Program> logger,
         CancellationToken cancellationToken)
     {
         var item = await context.InspectionCases.SingleOrDefaultAsync(value => value.Id == id, cancellationToken);
@@ -202,7 +205,7 @@ public static class CaseEndpoints
             context.ChangeTracker.Clear();
             var storedAssignment = await context.CaseAssignments.AsNoTracking()
                 .SingleAsync(value => value.CaseId == id && value.IsCurrent, cancellationToken);
-            await AddNotificationAsync(context, technician.Id, NotificationTypes.CaseAssigned,
+            await AddNotificationAsync(context, emailSender, logger,technician.Id, NotificationTypes.CaseAssigned,
                 "Nuevo expediente asignado", $"Se le asignó el expediente {id}.", id,
                 $"assignment:{storedAssignment.Id}:{technician.Id}", cancellationToken);
             return Results.Ok(storedAssignment);
@@ -261,7 +264,7 @@ public static class CaseEndpoints
         };
         context.CaseAssignments.Add(assignment);
         await context.SaveChangesAsync(cancellationToken);
-        await AddNotificationAsync(context, technician.Id, NotificationTypes.CaseAssigned,
+        await AddNotificationAsync(context, emailSender, logger,technician.Id, NotificationTypes.CaseAssigned,
             "Nuevo expediente asignado", $"Se le asignó el expediente {id}.", id,
             $"assignment:{assignment.Id}:{technician.Id}", cancellationToken);
         return Results.Ok(assignment);
@@ -283,6 +286,8 @@ public static class CaseEndpoints
         ClaimsPrincipal principal,
         EbrDbContext context,
         UserManager<ApplicationUser> userManager,
+        IEmailSender emailSender,
+        ILogger<Program> logger,
         CancellationToken cancellationToken)
     {
         var item = await context.InspectionCases.SingleOrDefaultAsync(value => value.Id == id, cancellationToken);
@@ -331,7 +336,7 @@ public static class CaseEndpoints
             context.ChangeTracker.Clear();
             var storedSchedule = await context.CaseSchedules.AsNoTracking()
                 .SingleAsync(value => value.CaseId == id && value.IsCurrent, cancellationToken);
-            await AddNotificationAsync(context, assignment.TechnicianId, NotificationTypes.CaseScheduled,
+            await AddNotificationAsync(context, emailSender, logger,assignment.TechnicianId, NotificationTypes.CaseScheduled,
                 "Evaluación programada", $"El expediente {id} fue programado para {storedSchedule.ScheduledFor:u}.", id,
                 $"schedule:{storedSchedule.Id}:{assignment.TechnicianId}", cancellationToken);
             return Results.Ok(storedSchedule);
@@ -363,7 +368,7 @@ public static class CaseEndpoints
         };
         context.CaseSchedules.Add(schedule);
         await context.SaveChangesAsync(cancellationToken);
-        await AddNotificationAsync(context, assignment.TechnicianId, NotificationTypes.CaseScheduled,
+        await AddNotificationAsync(context, emailSender, logger,assignment.TechnicianId, NotificationTypes.CaseScheduled,
             "Evaluación programada", $"El expediente {id} fue programado para {schedule.ScheduledFor:u}.", id,
             $"schedule:{schedule.Id}:{assignment.TechnicianId}", cancellationToken);
         return Results.Ok(schedule);
@@ -603,8 +608,8 @@ public static class CaseEndpoints
         (request.Observations is null || request.Observations.Length <= 2000);
 
     private static async Task AddNotificationAsync(
-        EbrDbContext context, Guid recipientId, string type, string title, string message,
-        int caseId, string operationId, CancellationToken cancellationToken)
+        EbrDbContext context, IEmailSender emailSender, ILogger<Program> logger, Guid recipientId, string type,
+        string title, string message, int caseId, string operationId, CancellationToken cancellationToken)
     {
         if (await context.Notifications.AnyAsync(x => x.OperationId == operationId, cancellationToken)) return;
         context.Notifications.Add(new Notification
@@ -618,7 +623,33 @@ public static class CaseEndpoints
             OperationId = operationId
         });
         await context.SaveChangesAsync(cancellationToken);
+        await SendNotificationEmailAsync(context, emailSender, logger, recipientId, title, message, cancellationToken);
     }
+
+    // El correo es un complemento de la notificación in-app, nunca un requisito para que el flujo
+    // avance: un proveedor SMTP caído no puede bloquear la asignación o programación de un caso.
+    internal static async Task SendNotificationEmailAsync(
+        EbrDbContext context, IEmailSender emailSender, ILogger<Program> logger, Guid recipientId,
+        string title, string message, CancellationToken cancellationToken)
+    {
+        var recipientEmail = await context.Users.AsNoTracking()
+            .Where(user => user.Id == recipientId)
+            .Select(user => user.Email)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(recipientEmail)) return;
+
+        try
+        {
+            await emailSender.SendAsync(recipientEmail, title, message, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            LogNotificationEmailFailed(logger, recipientEmail, ex);
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "No fue posible enviar el correo de notificación a {RecipientEmail}.")]
+    private static partial void LogNotificationEmailFailed(ILogger logger, string recipientEmail, Exception ex);
 
     private sealed record TransitionRequest(string NewStatus, string Reason);
     private sealed record InstitutionalCaseRequest(int CompanyId, string Reason, string? Observations = null);

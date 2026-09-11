@@ -9,8 +9,10 @@ using Microsoft.Extensions.Hosting;
 using EBR.Infrastructure.Risk;
 using EBR.Application.Risk;
 using EBR.Application.Evaluations;
+using EBR.Application.Email;
 using EBR.Application.Evidence;
 using EBR.Application.Reports;
+using EBR.Infrastructure.Email;
 using EBR.Infrastructure.Evaluations;
 using EBR.Infrastructure.Evidence;
 using EBR.Infrastructure.Reports;
@@ -81,6 +83,17 @@ public static class DependencyInjection
             services.AddSingleton<IEvidenceStorage, FileSystemEvidenceStorage>();
         else
             services.AddSingleton<IEvidenceStorage, MinioEvidenceStorage>();
+
+        // Envío de correo: mismo criterio que el almacenamiento de evidencias. Sin host SMTP
+        // configurado se usa un envío nulo que solo registra en el log, para no exigir un proveedor
+        // real en desarrollo o en las pruebas.
+        services.AddOptions<EmailOptions>()
+            .Bind(configuration.GetSection(EmailOptions.SectionName));
+        var emailHost = configuration[$"{EmailOptions.SectionName}:Host"];
+        if (string.IsNullOrWhiteSpace(emailHost))
+            services.AddSingleton<IEmailSender, NullEmailSender>();
+        else
+            services.AddSingleton<IEmailSender, SmtpEmailSender>();
 
         return services;
     }

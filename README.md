@@ -13,6 +13,7 @@ Aplicación web para gestionar evaluaciones basadas en riesgo e inspecciones de 
 - React 19, TypeScript y Vite
 - Node.js 20, 22 o 24 y pnpm
 - MinIO local para el almacenamiento de evidencias (con respaldo en sistema de archivos)
+- MailKit (SMTP) para el envío de correo (recuperación de contraseña y notificaciones), con respaldo que solo registra en el log si no hay proveedor configurado
 - xUnit para las pruebas de la API
 - Vitest para las pruebas de la interfaz
 - Playwright para las pruebas de extremo a extremo (Chromium, Firefox y WebKit)
@@ -92,7 +93,7 @@ Dentro del alcance del sistema, quedan pendientes o fuera de esta entrega:
 - El panel de administración no tiene todavía series históricas agregadas por mes ni un repositorio de informes descargables a ese nivel; el informe oficial se descarga por expediente desde la pantalla del coordinador.
 - La validación de solapamiento de horario del técnico se aplica dentro de la transacción de cada solicitud; no hay una restricción declarativa a nivel de base de datos, así que dos solicitudes verdaderamente simultáneas fuera de esa ruta transaccional podrían, en teoría, colarse.
 - Varias reglas de negocio existen por partida doble: una vez en el endpoint (que usan las pruebas automatizadas) y otra vez como rutina de PostgreSQL (para que la base sea consistente si algún día se accede fuera de la API). Si se modifica una regla, hay que actualizar ambas.
-- Integraciones externas descritas en la especificación pero fuera del alcance de esta entrega: correo electrónico, SMS, firma electrónica e integración con GIS/cartografía.
+- Integraciones externas descritas en la especificación pero fuera del alcance de esta entrega: SMS, firma electrónica e integración con GIS/cartografía. El correo electrónico ya está implementado (SMTP vía MailKit): recuperación de contraseña y las notificaciones de `Notification.cs` (asignación, programación, revisión de informe, cierre de expediente) se envían también por correo al destinatario registrado.
 
 Ninguna de estas limitaciones bloquea el ciclo principal descrito arriba.
 
