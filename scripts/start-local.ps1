@@ -30,7 +30,7 @@ if (Test-Path -LiteralPath $minioExecutable) {
     # las credenciales por omisión y rechazaría a la API, que se autentica con las de .env.
     [Environment]::SetEnvironmentVariable("MINIO_ROOT_USER", $env:Minio__AccessKey, "Process")
     [Environment]::SetEnvironmentVariable("MINIO_ROOT_PASSWORD", $env:Minio__SecretKey, "Process")
-    $minio = Start-Process -FilePath $minioExecutable -ArgumentList @("server", $minioData, "--console-address", ":9001") -WorkingDirectory (Split-Path $minioExecutable) -WindowStyle Hidden -PassThru
+    $minio = Start-Process -FilePath $minioExecutable -ArgumentList @("server", ('"{0}"' -f $minioData), "--console-address", ":9001") -WorkingDirectory (Split-Path $minioExecutable) -WindowStyle Hidden -PassThru
     Set-Content -LiteralPath (Join-Path $runDirectory "minio.pid") -Value $minio.Id
 }
 

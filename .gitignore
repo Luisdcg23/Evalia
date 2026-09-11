@@ -5,6 +5,7 @@ build/
 **/obj/
 .cache/
 .env
+.env.*
 .env.local
 .env.*.local
 !.env.example
@@ -21,8 +22,10 @@ playwright-report/
 blob-report/
 .playwright/
 playwright/.cache/
-storage/data/
-storage/evidencias/
-storage/minio/minio.exe
+storage/
+*.pfx
+*.p12
+*.key
+*.pem
 **/storage/evidencias/
 **/storage/data/
