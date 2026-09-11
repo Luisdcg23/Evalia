@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import FieldEvaluationScreen from "./features/field-evaluation/FieldEvaluationScreen";
 import NotificationsBell from "./features/notifications/NotificationsBell";
 import {
   listMyCases, listMySchedule,
@@ -16,7 +17,7 @@ function useWidth() {
 }
 
 /* ── Types ──────────────────────────────────────────────── */
-type Section    = "inicio" | "evaluaciones" | "calendario" | "reportes" | "configuracion";
+type Section    = "inicio" | "evaluaciones" | "campo" | "calendario" | "reportes" | "configuracion";
 type EvalStatus = "Pendiente" | "En Curso" | "Completado";
 type LoadState  = "loading" | "loaded" | "error";
 
@@ -59,6 +60,7 @@ function formatTime(iso: string): string {
 const NAV: { id: Section; label: string; icon: (c: string) => React.ReactNode }[] = [
   { id: "inicio",       label: "Inicio",             icon: c => <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z" stroke={c} strokeWidth="1.75" /><polyline points="9,22 9,12 15,12 15,22" stroke={c} strokeWidth="1.75" /></svg> },
   { id: "evaluaciones", label: "Evaluaciones",       icon: c => <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M9 11l3 3L22 4" stroke={c} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" /><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke={c} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" /></svg> },
+  { id: "campo",        label: "Evaluación en campo", icon: c => <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="4" y="3" width="16" height="18" rx="2" stroke={c} strokeWidth="1.75" /><path d="M8 7h8M8 11h8M8 15h5" stroke={c} strokeWidth="1.75" strokeLinecap="round" /></svg> },
   { id: "calendario",   label: "Calendario",         icon: c => <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="18" height="18" rx="2" stroke={c} strokeWidth="1.75" /><path d="M16 2v4M8 2v4M3 10h18" stroke={c} strokeWidth="1.75" strokeLinecap="round" /></svg> },
   { id: "reportes",     label: "Pendientes informe", icon: c => <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke={c} strokeWidth="1.75" /><polyline points="14,2 14,8 20,8" stroke={c} strokeWidth="1.75" /><line x1="16" y1="13" x2="8" y2="13" stroke={c} strokeWidth="1.75" strokeLinecap="round" /></svg> },
   { id: "configuracion", label: "Configuración",     icon: c => <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke={c} strokeWidth="1.75" /><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" stroke={c} strokeWidth="1.75" /></svg> },
@@ -192,6 +194,81 @@ function EvaluacionesSection({ cases, state, error }: { cases: MyCaseRow[]; stat
       {state !== "loaded" || filtered.length === 0
         ? <StateNote state={state} error={error} empty="No hay evaluaciones para este filtro." />
         : <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{filtered.map(row => <EvalCard key={row.id} row={row} />)}</div>}
+    </div>
+  );
+}
+
+/* ── Section: Evaluación en campo (RF-12 a RF-16, RF-18) ───
+   Lista los expedientes asignados con una acción según su estado y, al elegir
+   uno, entra en la pantalla de captura/resultado/informe de `FieldEvaluationScreen`.
+   Todo el detalle vive en `features/field-evaluation/`; aquí solo se decide qué
+   caso está activo, siguiendo el mismo patrón de pestañas del resto del panel. */
+function fieldActionFor(status: string): { label: string; enabled: boolean } {
+  if (status === "SCHEDULED") return { label: "Iniciar evaluación", enabled: true };
+  if (status === "IN_EVALUATION") return { label: "Continuar captura", enabled: true };
+  if (["PENDING_REPORT", "IN_REVIEW", "CORRECTION_REQUIRED", "APPROVED", "CLOSED"].includes(status)) {
+    return { label: "Ver resultado e informe", enabled: true };
+  }
+  return { label: "Pendiente de programar", enabled: false };
+}
+
+function CampoSection({
+  cases, state, error, accessToken, onCaseChanged,
+}: {
+  cases: MyCaseRow[]; state: LoadState; error: string; accessToken: string; onCaseChanged: () => void | Promise<void>;
+}) {
+  const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
+  const selected = cases.find(row => row.id === selectedCaseId) ?? null;
+
+  if (selected) {
+    return (
+      <FieldEvaluationScreen
+        accessToken={accessToken}
+        caseRow={selected}
+        onExit={() => setSelectedCaseId(null)}
+        onCaseChanged={onCaseChanged}
+      />
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <SectionHeader title="Evaluación en campo" subtitle="Ejecuta la ficha BPM y emite el informe de tus expedientes asignados" />
+      {state !== "loaded" || cases.length === 0
+        ? <StateNote state={state} error={error} empty="No tienes expedientes asignados." />
+        : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {cases.map(row => {
+              const action = fieldActionFor(row.status);
+              const status = evalStatus(row.status);
+              const st = STATUS_COLOR[status];
+              return (
+                <GlassCard key={row.id} accent={st.color}>
+                  <div style={{ padding: "14px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <div>
+                      <span style={{ fontSize: "0.52rem", fontFamily: "'Courier New',monospace", color: "rgba(148,163,184,0.25)" }}>CAS-{row.id}</span>
+                      <p style={{ fontSize: "0.88rem", fontWeight: 700, color: "#f1f5f9", fontFamily: "Poppins, sans-serif" }}>{row.companyName}</p>
+                      <p style={{ fontSize: "0.65rem", color: "rgba(148,163,184,0.4)", fontFamily: "Poppins, sans-serif" }}>{sourceLabel(row.sourceType)}</p>
+                    </div>
+                    <button
+                      onClick={() => setSelectedCaseId(row.id)}
+                      disabled={!action.enabled}
+                      style={{
+                        padding: "9px 16px", borderRadius: 10, fontSize: "0.76rem", fontWeight: 700,
+                        fontFamily: "Poppins, sans-serif", cursor: action.enabled ? "pointer" : "not-allowed",
+                        border: "none", opacity: action.enabled ? 1 : 0.4,
+                        background: action.enabled ? "linear-gradient(135deg,#3BF6E5,#06b6d4)" : "rgba(255,255,255,0.06)",
+                        color: action.enabled ? "#0F172A" : "rgba(148,163,184,0.5)",
+                      }}
+                    >
+                      {action.label}
+                    </button>
+                  </div>
+                </GlassCard>
+              );
+            })}
+          </div>
+        )}
     </div>
   );
 }
@@ -446,6 +523,7 @@ export default function TechnicianDashboard({
           <div key={section} className="hide-scroll" style={{ flex: 1, overflowY: "auto", padding: isMobile ? "16px 14px 84px" : "24px 28px 36px" }}>
             {section === "inicio" && <InicioSection cases={cases} schedule={schedule} state={state} error={error} />}
             {section === "evaluaciones" && <EvaluacionesSection cases={cases} state={state} error={error} />}
+            {section === "campo" && <CampoSection cases={cases} state={state} error={error} accessToken={accessToken} onCaseChanged={load} />}
             {section === "calendario" && <CalendarioSection schedule={schedule} state={state} error={error} />}
             {section === "reportes" && <ReportesSection cases={cases} state={state} error={error} />}
             {section === "configuracion" && <ConfiguracionSection userName={userName} onToast={showToast} />}

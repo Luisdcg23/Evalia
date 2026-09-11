@@ -9,16 +9,32 @@ public static class EvaluationTemplateEndpoints
 {
     public static IEndpointRouteBuilder MapEvaluationTemplateEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        // El grupo admite por defecto a Administrador, Coordinador y Técnico Evaluador, porque el técnico
+        // necesita leer el árbol de preguntas para responder la ficha en campo y el coordinador para dar
+        // seguimiento. Las rutas de ESCRITURA (crear/editar/borrar ítems, publicar, versionar y crear
+        // plantilla) restringen ese acceso a solo Administrador con una segunda llamada a
+        // `RequireAuthorization`: como las políticas de un mismo endpoint se combinan con AND, esa segunda
+        // llamada actúa como intersección (angosta el conjunto del grupo, nunca lo amplía) — mismo patrón
+        // de "narrowing" que ya usan `CaseEndpoints` (p. ej. `AssignAsync`) y `RiskCatalogEndpoints`
+        // (las rutas `POST` de catálogos). Solo `GET /` y `GET /{id}/items` (lectura) se quedan con la
+        // política amplia del grupo.
         var group = endpoints.MapGroup("/api/evaluation-templates").WithTags("Plantillas de evaluación")
-            .RequireAuthorization(policy => policy.RequireRole(SystemRoles.Administrator));
+            .RequireAuthorization(policy => policy.RequireRole(
+                SystemRoles.Administrator, SystemRoles.Coordinator, SystemRoles.Evaluator));
         group.MapGet("/", ListAsync);
-        group.MapPost("/", CreateAsync);
+        group.MapPost("/", CreateAsync)
+            .RequireAuthorization(policy => policy.RequireRole(SystemRoles.Administrator));
         group.MapGet("/{id:int}/items", ListItemsAsync);
-        group.MapPost("/{id:int}/items", CreateItemAsync);
-        group.MapPut("/{id:int}/items/{itemId:int}", UpdateItemAsync);
-        group.MapDelete("/{id:int}/items/{itemId:int}", DeleteItemAsync);
-        group.MapPost("/{id:int}/publish", PublishAsync);
-        group.MapPost("/{id:int}/versions", CreateVersionAsync);
+        group.MapPost("/{id:int}/items", CreateItemAsync)
+            .RequireAuthorization(policy => policy.RequireRole(SystemRoles.Administrator));
+        group.MapPut("/{id:int}/items/{itemId:int}", UpdateItemAsync)
+            .RequireAuthorization(policy => policy.RequireRole(SystemRoles.Administrator));
+        group.MapDelete("/{id:int}/items/{itemId:int}", DeleteItemAsync)
+            .RequireAuthorization(policy => policy.RequireRole(SystemRoles.Administrator));
+        group.MapPost("/{id:int}/publish", PublishAsync)
+            .RequireAuthorization(policy => policy.RequireRole(SystemRoles.Administrator));
+        group.MapPost("/{id:int}/versions", CreateVersionAsync)
+            .RequireAuthorization(policy => policy.RequireRole(SystemRoles.Administrator));
         return endpoints;
     }
 

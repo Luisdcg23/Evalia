@@ -86,6 +86,37 @@ public sealed class EvaluationTemplateEndpointTests : IClassFixture<EbrApiFactor
         Assert.Equal("Higiene", cloned![0].Description);
     }
 
+    [Fact]
+    public async Task TechnicianCanReadItemsButCannotWriteThem()
+    {
+        var adminToken = await LoginAsync("admin@ebr.local");
+        var template = await PostAsync<TemplateResponse>("/api/evaluation-templates", new { name = "Lectura del técnico" }, adminToken);
+        await PostAsync<ItemResponse>($"/api/evaluation-templates/{template.Id}/items", new
+        {
+            code = "1",
+            description = "Higiene del personal",
+            itemType = "CHAPTER",
+            order = 1
+        }, adminToken);
+
+        var technicianToken = await LoginAsync("tecnico@ebr.local");
+        using var listTemplates = await GetAsync("/api/evaluation-templates", technicianToken);
+        using var listItems = await GetAsync($"/api/evaluation-templates/{template.Id}/items", technicianToken);
+        using var forbiddenCreate = await SendAsync(HttpMethod.Post, $"/api/evaluation-templates/{template.Id}/items", new
+        {
+            code = "2",
+            description = "Intento no permitido",
+            itemType = "CHAPTER",
+            order = 2
+        }, technicianToken);
+
+        Assert.Equal(HttpStatusCode.OK, listTemplates.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, listItems.StatusCode);
+        var items = await listItems.Content.ReadFromJsonAsync<List<ItemResponse>>();
+        Assert.Single(items!);
+        Assert.Equal(HttpStatusCode.Forbidden, forbiddenCreate.StatusCode);
+    }
+
     private async Task<string> LoginAsync(string email)
     {
         using var response = await _client.PostAsJsonAsync("/api/auth/login", new { email, password = "EbrLocal2026!" });
