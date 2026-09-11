@@ -70,6 +70,19 @@ public sealed class EvaluationOfficialReport
     public long SizeBytes { get; set; }
     public required string Sha256 { get; set; }
     public required string StorageKey { get; set; }
+
+    /// <summary>
+    /// Firma criptográfica del PDF (RF-19, firma electrónica). La genera <c>IDocumentSigner</c> con la
+    /// clave privada propia del sistema al momento de emitir el oficial, así que siempre está presente
+    /// —no es opcional como la geolocalización de evidencias— y, como el resto de esta fila, no admite
+    /// modificación después: el mismo disparador que la vuelve inmutable lo impide.
+    /// </summary>
+    public required string SignatureAlgorithm { get; set; }
+    public required string SignatureBase64 { get; set; }
+
+    /// <summary>Huella SHA-256 de la clave pública vigente al firmar; identifica qué clave verificarla.</summary>
+    public required string PublicKeyThumbprint { get; set; }
+
     public DateTimeOffset GeneratedAt { get; set; } = DateTimeOffset.UtcNow;
     public Guid GeneratedBy { get; set; }
 }

@@ -51,6 +51,11 @@ public static class EvaluationReportEndpoints
             .RequireAuthorization(policy => policy.RequireRole(
                 SystemRoles.Evaluator, SystemRoles.Coordinator, SystemRoles.Administrator));
 
+        endpoints.MapGet("/api/evaluations/{id:int}/report/official/verify", VerifyOfficialAsync)
+            .WithTags("Evaluaciones")
+            .RequireAuthorization(policy => policy.RequireRole(
+                SystemRoles.Evaluator, SystemRoles.Coordinator, SystemRoles.Administrator));
+
         endpoints.MapPost("/api/cases/{id:int}/close", CloseCaseAsync)
             .WithTags("Casos")
             .RequireAuthorization(policy => policy.RequireRole(SystemRoles.Coordinator));
@@ -295,7 +300,7 @@ public static class EvaluationReportEndpoints
 
     private static async Task<IResult> GenerateOfficialAsync(
         int id, ClaimsPrincipal principal, EbrDbContext context, IEvidenceStorage storage,
-        IOfficialReportRenderer renderer, CancellationToken cancellationToken)
+        IOfficialReportRenderer renderer, IDocumentSigner documentSigner, CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var actingUserId))
             return Results.Unauthorized();
@@ -324,6 +329,11 @@ public static class EvaluationReportEndpoints
         await using (var content = new MemoryStream(bytes, writable: false))
             await storage.SaveAsync(storageKey, "application/pdf", content, cancellationToken);
 
+        // Firma electrónica (RF-19): se firma el binario exacto que se guardó, con la clave privada del
+        // sistema; la huella de la clave pública queda en el metadato para poder verificar después
+        // aunque la clave activa cambie con el tiempo.
+        var signature = documentSigner.Sign(bytes);
+
         var official = new EvaluationOfficialReport
         {
             ReportId = report.Id,
@@ -331,6 +341,9 @@ public static class EvaluationReportEndpoints
             SizeBytes = bytes.LongLength,
             Sha256 = hash,
             StorageKey = storageKey,
+            SignatureAlgorithm = documentSigner.Algorithm,
+            SignatureBase64 = Convert.ToBase64String(signature),
+            PublicKeyThumbprint = documentSigner.PublicKeyThumbprint,
             GeneratedBy = actingUserId
         };
         context.EvaluationOfficialReports.Add(official);
@@ -367,6 +380,49 @@ public static class EvaluationReportEndpoints
         if (item is null) return Results.NotFound();
         var content = await storage.OpenAsync(item.StorageKey, cancellationToken);
         return content is null ? Results.NotFound() : Results.File(content, item.MimeType, item.FileName);
+    }
+
+    /// <summary>
+    /// Verifica el PDF oficial contra su firma electrónica (RF-19): recalcula el hash del binario tal
+    /// como está hoy en el almacenamiento y comprueba la firma con la clave pública del sistema. Ambas
+    /// comprobaciones son independientes —el hash detecta cualquier alteración del binario, la firma
+    /// además certifica que lo emitió el sistema con la clave vigente al momento de generarlo— y las
+    /// dos deben cumplirse para que el documento se considere válido.
+    /// </summary>
+    private static async Task<IResult> VerifyOfficialAsync(
+        int id, ClaimsPrincipal principal, EbrDbContext context, IEvidenceStorage storage,
+        IDocumentSigner documentSigner, CancellationToken cancellationToken)
+    {
+        var instance = await context.EvaluationInstances.AsNoTracking()
+            .SingleOrDefaultAsync(value => value.Id == id, cancellationToken);
+        if (instance is null) return Results.NotFound();
+        if (!await CanReadAsync(principal, instance.CaseId, context, cancellationToken)) return Results.Forbid();
+
+        var item = await (from official in context.EvaluationOfficialReports.AsNoTracking()
+                          join report in context.EvaluationReports.AsNoTracking() on official.ReportId equals report.Id
+                          where report.EvaluationInstanceId == id
+                          orderby report.Version descending
+                          select official).FirstOrDefaultAsync(cancellationToken);
+        if (item is null) return Results.NotFound();
+
+        var content = await storage.OpenAsync(item.StorageKey, cancellationToken);
+        if (content is null) return Results.NotFound();
+
+        byte[] bytes;
+        await using (content)
+        {
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, cancellationToken);
+            bytes = buffer.ToArray();
+        }
+
+        var hashMatches = string.Equals(
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), item.Sha256, StringComparison.Ordinal);
+        var signatureValid = documentSigner.Verify(bytes, Convert.FromBase64String(item.SignatureBase64));
+
+        return Results.Ok(new SignatureVerificationResponse(
+            item.Id, id, hashMatches, signatureValid, hashMatches && signatureValid,
+            item.SignatureAlgorithm, item.PublicKeyThumbprint, item.GeneratedAt, item.GeneratedBy));
     }
 
     private static async Task<IResult> CloseCaseAsync(
@@ -519,7 +575,7 @@ public static class EvaluationReportEndpoints
 
     private static OfficialReportResponse DescribeOfficial(EvaluationOfficialReport value, int instanceId, int version) =>
         new(value.Id, instanceId, value.ReportId, version, value.FileName, value.MimeType, value.SizeBytes,
-            value.Sha256, value.GeneratedAt, value.GeneratedBy);
+            value.Sha256, value.SignatureAlgorithm, value.PublicKeyThumbprint, value.GeneratedAt, value.GeneratedBy);
 
     private static ClosureResponse DescribeClosure(CaseClosure value) => new(value.Id, value.CaseId, value.ReportId,
         value.OfficialReportId, value.Status, value.Result, value.ClosedAt, value.ClosedBy);
@@ -595,7 +651,11 @@ public static class EvaluationReportEndpoints
         Guid CreatedBy);
 
     private sealed record OfficialReportResponse(int Id, int EvaluationInstanceId, int ReportId, int ReportVersion,
-        string FileName, string MimeType, long SizeBytes, string Sha256, DateTimeOffset GeneratedAt, Guid GeneratedBy);
+        string FileName, string MimeType, long SizeBytes, string Sha256, string SignatureAlgorithm,
+        string PublicKeyThumbprint, DateTimeOffset GeneratedAt, Guid GeneratedBy);
     private sealed record ClosureResponse(int Id, int CaseId, int ReportId, int OfficialReportId, string Status,
         string Result, DateTimeOffset ClosedAt, Guid ClosedBy);
+    private sealed record SignatureVerificationResponse(
+        int OfficialReportId, int EvaluationInstanceId, bool HashMatches, bool SignatureValid, bool Valid,
+        string SignatureAlgorithm, string PublicKeyThumbprint, DateTimeOffset GeneratedAt, Guid GeneratedBy);
 }

@@ -722,6 +722,8 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
             {
                 table.HasCheckConstraint("CK_Evaluacion_Informe_Oficial_Tamano", "tamano_bytes > 0");
                 table.HasCheckConstraint("CK_Evaluacion_Informe_Oficial_Hash", "char_length(hash_sha256) = 64");
+                table.HasCheckConstraint("CK_Evaluacion_Informe_Oficial_Firma", "char_length(firma_base64) > 0");
+                table.HasCheckConstraint("CK_Evaluacion_Informe_Oficial_Huella", "char_length(huella_clave_publica) = 64");
             });
             entity.HasKey(item => item.Id);
             entity.HasIndex(item => item.ReportId).IsUnique();
@@ -732,6 +734,9 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
             entity.Property(item => item.SizeBytes).HasColumnName("tamano_bytes");
             entity.Property(item => item.Sha256).HasColumnName("hash_sha256").HasMaxLength(64);
             entity.Property(item => item.StorageKey).HasColumnName("clave_objeto").HasMaxLength(500);
+            entity.Property(item => item.SignatureAlgorithm).HasColumnName("algoritmo_firma").HasMaxLength(30);
+            entity.Property(item => item.SignatureBase64).HasColumnName("firma_base64").HasMaxLength(500);
+            entity.Property(item => item.PublicKeyThumbprint).HasColumnName("huella_clave_publica").HasMaxLength(64);
             entity.Property(item => item.GeneratedAt).HasColumnName("fecha_generacion");
             entity.Property(item => item.GeneratedBy).HasColumnName("generado_por");
             entity.HasOne<EvaluationReport>().WithMany().HasForeignKey(item => item.ReportId).OnDelete(DeleteBehavior.Restrict);

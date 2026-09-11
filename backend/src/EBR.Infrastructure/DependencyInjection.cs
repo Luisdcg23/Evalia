@@ -73,6 +73,13 @@ public static class DependencyInjection
         QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
         services.AddSingleton<IOfficialReportRenderer, OfficialReportRenderer>();
 
+        // Firma electrónica del PDF oficial (RF-19): a diferencia de MinIO/correo no hay proveedor
+        // externo que activar condicionalmente — la clave RSA del sistema siempre es local y se
+        // autogenera en el primer arranque si no existe todavía.
+        services.AddOptions<SigningOptions>()
+            .Bind(configuration.GetSection(SigningOptions.SectionName));
+        services.AddSingleton<IDocumentSigner, RsaFileDocumentSigner>();
+
         // Almacenamiento de evidencias: la abstracción es la misma para todos los entornos y solo
         // cambia la implementación. Sin extremo de MinIO configurado se usa el sistema de archivos
         // local, que reproduce la misma semántica de bucket sin exigir un servicio adicional.

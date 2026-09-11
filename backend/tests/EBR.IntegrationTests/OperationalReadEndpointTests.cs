@@ -173,6 +173,7 @@ public sealed class OperationalReadEndpointTests : IClassFixture<EbrApiFactory>
             {
                 ReportId = report.Id, FileName = "informe-oficial.pdf", SizeBytes = 2048,
                 Sha256 = new string('a', 64), StorageKey = $"informes/{caseId}/oficial.pdf",
+                SignatureAlgorithm = "RSA-SHA256", SignatureBase64 = "dGVzdA==", PublicKeyThumbprint = new string('b', 64),
                 GeneratedAt = DateTimeOffset.UtcNow, GeneratedBy = actor
             });
             await db.SaveChangesAsync();
