@@ -345,3 +345,117 @@ export async function listReportReviews(accessToken: string, evaluationId: numbe
   if (!response.ok) throw new Error(await readErrorMessage(response, "No fue posible consultar las revisiones del informe."));
   return response.json() as Promise<EvaluationReportReview[]>;
 }
+
+export const REPORT_REVIEW_DECISIONS = ["APPROVED", "RETURNED", "CORRECTION_REQUESTED"] as const;
+export type ReportReviewDecision = (typeof REPORT_REVIEW_DECISIONS)[number];
+
+/**
+ * Revisión del coordinador sobre la versión vigente del informe (RF-17/RF-18). Devolver o pedir
+ * corrección exige observaciones no vacías; el backend rechaza con 400 si faltan.
+ */
+export async function reviewReport(
+  accessToken: string,
+  evaluationId: number,
+  input: { decision: ReportReviewDecision; observations?: string },
+): Promise<EvaluationReportReview> {
+  const response = await fetch(`${baseUrl}/api/evaluations/${evaluationId}/report/review`, {
+    method: "POST",
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify({ decision: input.decision, observations: input.observations?.trim() ?? "" }),
+  });
+  if (!response.ok) {
+    if (response.status === 409) {
+      throw new Error(await readErrorMessage(response, "El expediente no está en revisión."));
+    }
+    if (response.status === 400) {
+      throw new Error(await readErrorMessage(response, "Devolver el informe exige observaciones que indiquen qué corregir."));
+    }
+    if (response.status === 404) throw new Error("El informe no existe.");
+    throw new Error(await readErrorMessage(response, "No fue posible registrar la revisión del informe."));
+  }
+  return response.json() as Promise<EvaluationReportReview>;
+}
+
+export interface OfficialReport {
+  id: number;
+  evaluationInstanceId: number;
+  reportId: number;
+  reportVersion: number;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+  generatedAt: string;
+  generatedBy: string;
+}
+
+/**
+ * Genera el PDF oficial (RF-19); exige que la última versión del informe esté aprobada. Es
+ * idempotente: si ya existe, el backend devuelve el mismo metadato sin regenerar el archivo.
+ */
+export async function generateOfficialReport(accessToken: string, evaluationId: number): Promise<OfficialReport> {
+  const response = await fetch(`${baseUrl}/api/evaluations/${evaluationId}/report/official`, {
+    method: "POST",
+    headers: authHeaders(accessToken),
+  });
+  if (!response.ok) {
+    if (response.status === 409) {
+      throw new Error(await readErrorMessage(response, "La última versión del informe debe estar aprobada antes de generar el PDF oficial."));
+    }
+    if (response.status === 404) throw new Error("El informe no existe.");
+    throw new Error(await readErrorMessage(response, "No fue posible generar el PDF oficial."));
+  }
+  return response.json() as Promise<OfficialReport>;
+}
+
+/**
+ * Descarga el PDF oficial (RF-19). El endpoint exige el header Authorization, así que no es un link
+ * directo de navegador: se trae el blob por fetch y el nombre de archivo sugerido para guardarlo.
+ */
+export async function downloadOfficialReport(
+  accessToken: string,
+  evaluationId: number,
+): Promise<{ blob: Blob; fileName: string }> {
+  const response = await fetch(`${baseUrl}/api/evaluations/${evaluationId}/report/official/content`, {
+    headers: authHeaders(accessToken),
+  });
+  if (!response.ok) {
+    throw new Error(response.status === 404 ? "El PDF oficial todavía no ha sido generado." : "No fue posible descargar el PDF oficial.");
+  }
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+  const fileName = match?.[1] ? decodeURIComponent(match[1]) : `informe-evaluacion-${evaluationId}.pdf`;
+  return { blob: await response.blob(), fileName };
+}
+
+export interface CaseClosure {
+  id: number;
+  caseId: number;
+  reportId: number;
+  officialReportId: number;
+  status: string;
+  result: string;
+  closedAt: string;
+  closedBy: string;
+}
+
+/**
+ * Cierra el expediente (RF-19, irreversible). El backend exige informe aprobado y PDF oficial
+ * emitido; es idempotente si ya está cerrado (devuelve el cierre existente).
+ */
+export async function closeCase(accessToken: string, caseId: number, input: { result: string }): Promise<CaseClosure> {
+  const response = await fetch(`${baseUrl}/api/cases/${caseId}/close`, {
+    method: "POST",
+    headers: jsonHeaders(accessToken),
+    body: JSON.stringify({ result: input.result.trim() }),
+  });
+  if (!response.ok) {
+    if (response.status === 409) {
+      throw new Error(await readErrorMessage(response, "El expediente exige su última versión aprobada y el PDF oficial antes del cierre."));
+    }
+    if (response.status === 400) throw new Error("El resultado del cierre es obligatorio.");
+    if (response.status === 404) throw new Error("El expediente no existe.");
+    throw new Error(await readErrorMessage(response, "No fue posible cerrar el expediente."));
+  }
+  return response.json() as Promise<CaseClosure>;
+}

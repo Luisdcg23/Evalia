@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  getCurrentReport, getEvaluation, getEvaluationResult, issueReport, listEvidence, listReportReviews,
+  closeCase, downloadOfficialReport, generateOfficialReport, getCurrentReport, getEvaluation,
+  getEvaluationResult, issueReport, listEvidence, listReportReviews, reviewReport,
   saveEvaluationResponse, startEvaluation, submitEvaluation, uploadEvidence,
 } from "./api";
 
@@ -179,4 +180,96 @@ it("lists report reviews in order", async () => {
   const reviews = await listReportReviews("token", 13);
   expect(reviews[0].decision).toBe("CORRECTION_REQUESTED");
   expect(String(fetchMock.mock.calls[0][0])).toBe("http://localhost:5080/api/evaluations/13/report/reviews");
+});
+
+it("reviews a report with the exact decision/observations body", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 1, decision: "APPROVED" }) });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await reviewReport("token", 13, { decision: "APPROVED" });
+
+  const call = fetchMock.mock.calls[0];
+  expect(String(call[0])).toBe("http://localhost:5080/api/evaluations/13/report/review");
+  expect(call[1]).toMatchObject({ method: "POST" });
+  expect(JSON.parse(call[1].body as string)).toEqual({ decision: "APPROVED", observations: "" });
+});
+
+it("trims observations when returning or requesting correction", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 1, decision: "RETURNED" }) });
+  vi.stubGlobal("fetch", fetchMock);
+  await reviewReport("token", 13, { decision: "RETURNED", observations: "  falta firma  " });
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({ decision: "RETURNED", observations: "falta firma" });
+});
+
+it("maps a 400 on review to the missing-observations message", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 400, json: async () => ({ message: "Devolver el informe exige observaciones que indiquen qué corregir." }) }));
+  await expect(reviewReport("token", 13, { decision: "RETURNED" })).rejects.toThrow(/observaciones/i);
+});
+
+it("maps a 409 on review to a not-in-review message", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 409, json: async () => ({}) }));
+  await expect(reviewReport("token", 13, { decision: "APPROVED" })).rejects.toThrow(/no está en revisión/i);
+});
+
+it("generates the official report with a POST and no body", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 1, fileName: "informe-evaluacion-13-v1.pdf" }) });
+  vi.stubGlobal("fetch", fetchMock);
+  const official = await generateOfficialReport("token", 13);
+  expect(official.fileName).toBe("informe-evaluacion-13-v1.pdf");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "http://localhost:5080/api/evaluations/13/report/official",
+    expect.objectContaining({ method: "POST", headers: { Authorization: "Bearer token" } }),
+  );
+});
+
+it("maps a 409 on generating the official report to the approval-required message", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 409, json: async () => ({}) }));
+  await expect(generateOfficialReport("token", 13)).rejects.toThrow(/aprobada antes de generar/i);
+});
+
+it("downloads the official report as a blob with the suggested filename from Content-Disposition", async () => {
+  const blob = new Blob([new Uint8Array([1, 2, 3])], { type: "application/pdf" });
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    headers: new Headers({ "content-disposition": 'attachment; filename="informe-evaluacion-13-v1.pdf"' }),
+    blob: async () => blob,
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const result = await downloadOfficialReport("token", 13);
+
+  expect(result.fileName).toBe("informe-evaluacion-13-v1.pdf");
+  expect(result.blob).toBe(blob);
+  expect(fetchMock).toHaveBeenCalledWith(
+    "http://localhost:5080/api/evaluations/13/report/official/content",
+    { headers: { Authorization: "Bearer token" } },
+  );
+});
+
+it("falls back to a generic filename when Content-Disposition is missing", async () => {
+  const blob = new Blob([new Uint8Array([1])], { type: "application/pdf" });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, headers: new Headers(), blob: async () => blob }));
+  const result = await downloadOfficialReport("token", 13);
+  expect(result.fileName).toBe("informe-evaluacion-13.pdf");
+});
+
+it("maps a 404 on downloading the official report to a not-generated message", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404 }));
+  await expect(downloadOfficialReport("token", 13)).rejects.toThrow(/todavía no ha sido generado/i);
+});
+
+it("closes a case with the exact result body", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 1, caseId: 22, status: "CLOSED" }) });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await closeCase("token", 22, { result: "  Cumple satisfactoriamente  " });
+
+  const call = fetchMock.mock.calls[0];
+  expect(String(call[0])).toBe("http://localhost:5080/api/cases/22/close");
+  expect(JSON.parse(call[1].body as string)).toEqual({ result: "Cumple satisfactoriamente" });
+});
+
+it("maps a 409 on closing a case to the report/pdf-required message", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 409, json: async () => ({}) }));
+  await expect(closeCase("token", 22, { result: "x" })).rejects.toThrow(/PDF oficial/i);
 });

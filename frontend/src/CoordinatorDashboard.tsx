@@ -1,9 +1,17 @@
 import { useState, useEffect } from "react";
-import { listAlerts, type HealthAlert } from "./features/alerts/api";
-import { listComplaints, type Complaint } from "./features/complaints/api";
+import { createAlert, decideAlert, listAlerts, type AlertDecisionResult, type HealthAlert } from "./features/alerts/api";
+import { createComplaint, decideComplaint, listComplaints, type Complaint, type ComplaintDecisionResult } from "./features/complaints/api";
 import { listCompanies, type Company } from "./features/companies/api";
-import { assignTechnician, listCases, listSchedule, type ScheduleEntry } from "./features/cases/api";
-import { getDashboard, listTechnicians, type DashboardMetrics } from "./features/operations/api";
+import {
+  assignTechnician, cancelSchedule, createInstitutionalCase, listCases, listCaseSchedules,
+  listSchedule, rescheduleCase, scheduleCase, type CaseSchedule, type ScheduleEntry,
+} from "./features/cases/api";
+import { getDashboard, listMyCases, listTechnicians, type DashboardMetrics } from "./features/operations/api";
+import {
+  closeCase, downloadOfficialReport, generateOfficialReport, getCurrentReport, getEvaluationResult,
+  listReportReviews, reviewReport, type EvaluationReport, type EvaluationReportReview,
+  type EvaluationResult, type OfficialReport, type ReportReviewDecision,
+} from "./features/field-evaluation/api";
 import NotificationsBell from "./features/notifications/NotificationsBell";
 import CaseHistoryPanel from "./features/history/CaseHistoryPanel";
 
@@ -67,7 +75,7 @@ type TechStatus = "Disponible" | "En Campo" | "Descanso";
 interface Caso {
   id: string; empresa: string; tipo: string; zona: string;
   fecha: string; priority: Priority; asignado: string | null;
-  estado: EvalStatus; rawId: number; solicitudId?: string;
+  estado: EvalStatus; rawId: number; rawStatus: string; solicitudId?: string;
 }
 interface Tecnico {
   id: string; name: string; initials: string; status: TechStatus;
@@ -128,7 +136,7 @@ const SOURCE_LABEL: Record<string,string> = {
 
 function toCaso(item: { id:number; companyId:number; sourceType:string; sourceReferenceId:number; status:string; createdAt:string }, companies: Company[]): Caso {
   return {
-    id: `CAS-${item.id}`, rawId: item.id,
+    id: `CAS-${item.id}`, rawId: item.id, rawStatus: item.status,
     empresa: companies.find(company => company.id === item.companyId)?.tradeName ?? `Empresa #${item.companyId}`,
     tipo: SOURCE_LABEL[item.sourceType] ?? item.sourceType,
     zona: "Sin ubicación",
@@ -337,9 +345,119 @@ function EvaluacionesSection({ casos, loading, error }: { casos:Caso[]; loading:
 }
 
 /* ─────────────────────────────────────────────────────────────────────
+   Section: Programación institucional (RF-06, escenario 2)
+───────────────────────────────────────────────────────────────────── */
+function InstitutionalCaseForm({ companies, accessToken, onToast, onCreated, onClose }: {
+  companies: Company[]; accessToken: string;
+  onToast: (m:string)=>void; onCreated: ()=>Promise<void>; onClose: ()=>void;
+}) {
+  const [companyId, setCompanyId] = useState(""); const [reason, setReason] = useState("");
+  const [observations, setObservations] = useState(""); const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async () => {
+    if (!companyId || !reason.trim()) { setError("Selecciona la empresa e indica el motivo."); return; }
+    setSubmitting(true); setError("");
+    try {
+      const created = await createInstitutionalCase(accessToken, { companyId: Number(companyId), reason, observations: observations || undefined });
+      await onCreated();
+      onToast(`Caso institucional creado · CAS-${created.id}`);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No fue posible programar el caso institucional.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <GlassCard accent="#8b5cf6"><div style={{ padding:"18px 20px", display:"flex", flexDirection:"column", gap:12 }}>
+      <p style={{ fontSize:"0.65rem", fontWeight:700, color:"#8b5cf6", fontFamily:"Poppins, sans-serif", textTransform:"uppercase", letterSpacing:"0.1em" }}>Programación institucional (RF-06)</p>
+      <p style={{ fontSize:"0.66rem", color:"rgba(148,163,184,0.45)", fontFamily:"Poppins, sans-serif" }}>Abre un expediente directamente, sin alerta ni denuncia de por medio (plan anual, seguimiento, etc.).</p>
+      <div><label style={fieldLabelStyle}>Empresa</label>
+        <select value={companyId} onChange={e=>setCompanyId(e.target.value)} style={fieldBoxStyle}>
+          <option value="">Selecciona una empresa…</option>
+          {companies.map(c=><option key={c.id} value={c.id}>{c.tradeName}</option>)}
+        </select>
+      </div>
+      <div><label style={fieldLabelStyle}>Motivo</label><textarea value={reason} onChange={e=>setReason(e.target.value)} rows={2} style={{ ...fieldBoxStyle, resize:"vertical" }}/></div>
+      <div><label style={fieldLabelStyle}>Observaciones (opcional)</label><textarea value={observations} onChange={e=>setObservations(e.target.value)} rows={2} style={{ ...fieldBoxStyle, resize:"vertical" }}/></div>
+      {error && <p role="alert" style={{ fontSize:"0.68rem", color:"#fda4af", fontFamily:"Poppins, sans-serif" }}>{error}</p>}
+      <div style={{ display:"flex", gap:8 }}>
+        <button onClick={handleSubmit} disabled={submitting} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:submitting?"not-allowed":"pointer", opacity:submitting?0.7:1, background:"rgba(139,92,246,0.12)", borderTop:"1px solid rgba(139,92,246,0.4)", borderRight:"1px solid rgba(139,92,246,0.4)", borderBottom:"1px solid rgba(139,92,246,0.4)", borderLeft:"1px solid rgba(139,92,246,0.4)", color:"#8b5cf6", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>{submitting?"Programando…":"Crear expediente"}</button>
+        <button onClick={onClose} style={{ padding:"9px 16px", borderRadius:10, cursor:"pointer", background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.4)", fontSize:"0.72rem", fontFamily:"Poppins, sans-serif" }}>Cancelar</button>
+      </div>
+    </div></GlassCard>
+  );
+}
+
+/* ─────────────────────────────────────────────────────────────────────
    Section: Calendario
 ───────────────────────────────────────────────────────────────────── */
-function CalendarioSection({ schedule }: { schedule: ScheduleEntry[] }) {
+function ScheduleActions({ entry, accessToken, onToast, onRefresh }: {
+  entry: ScheduleEntry; accessToken: string; onToast:(m:string)=>void; onRefresh:()=>Promise<void>;
+}) {
+  const [mode, setMode] = useState<"idle"|"reprogramar"|"cancelar">("idle");
+  const [fecha, setFecha] = useState(""); const [hora, setHora] = useState("");
+  const [motivo, setMotivo] = useState(""); const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submitReprogram = async () => {
+    if (!fecha || !hora || !motivo.trim()) { setError("Indica fecha, hora y motivo."); return; }
+    setBusy(true); setError("");
+    try {
+      await rescheduleCase(accessToken, entry.caseId, { scheduledFor: new Date(`${fecha}T${hora}`).toISOString(), reason: motivo });
+      await onRefresh();
+      onToast(`Evaluación reprogramada · CAS-${entry.caseId}`);
+      setMode("idle");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No fue posible reprogramar.");
+    } finally { setBusy(false); }
+  };
+
+  const submitCancel = async () => {
+    if (!motivo.trim()) { setError("Indica el motivo de la cancelación."); return; }
+    setBusy(true); setError("");
+    try {
+      await cancelSchedule(accessToken, entry.caseId, { reason: motivo });
+      await onRefresh();
+      onToast(`Programación cancelada · CAS-${entry.caseId}`);
+      setMode("idle");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No fue posible cancelar la programación.");
+    } finally { setBusy(false); }
+  };
+
+  if (mode === "idle") {
+    return (
+      <div style={{ display:"flex", gap:6, flexShrink:0 }}>
+        <button onClick={()=>{ setMode("reprogramar"); setError(""); }} style={{ padding:"3px 9px", borderRadius:8, cursor:"pointer", background:"rgba(59,246,229,0.08)", borderTop:"1px solid rgba(59,246,229,0.3)", borderRight:"1px solid rgba(59,246,229,0.3)", borderBottom:"1px solid rgba(59,246,229,0.3)", borderLeft:"1px solid rgba(59,246,229,0.3)", color:"#3BF6E5", fontSize:"0.56rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Reprogramar</button>
+        <button onClick={()=>{ setMode("cancelar"); setError(""); }} style={{ padding:"3px 9px", borderRadius:8, cursor:"pointer", background:"rgba(239,68,68,0.08)", borderTop:"1px solid rgba(239,68,68,0.3)", borderRight:"1px solid rgba(239,68,68,0.3)", borderBottom:"1px solid rgba(239,68,68,0.3)", borderLeft:"1px solid rgba(239,68,68,0.3)", color:"#ef4444", fontSize:"0.56rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Cancelar</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:6, width:"100%", marginTop:6, padding:10, borderRadius:10, background:"rgba(255,255,255,0.03)" }}>
+      {mode==="reprogramar" && <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+        <input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} style={{ ...fieldBoxStyle, width:"auto", colorScheme:"dark" as const }}/>
+        <input type="time" value={hora} onChange={e=>setHora(e.target.value)} style={{ ...fieldBoxStyle, width:"auto", colorScheme:"dark" as const }}/>
+      </div>}
+      <input value={motivo} onChange={e=>setMotivo(e.target.value)} placeholder="Motivo…" style={fieldBoxStyle}/>
+      {error && <p role="alert" style={{ fontSize:"0.6rem", color:"#fda4af", fontFamily:"Poppins, sans-serif" }}>{error}</p>}
+      <div style={{ display:"flex", gap:6 }}>
+        <button onClick={mode==="reprogramar"?submitReprogram:submitCancel} disabled={busy} style={{ flex:1, padding:"6px 0", borderRadius:8, cursor:busy?"not-allowed":"pointer", opacity:busy?0.7:1, background:"rgba(229,59,246,0.12)", border:"none", color:"#E53BF6", fontSize:"0.6rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>{busy?"Guardando…":"Confirmar"}</button>
+        <button onClick={()=>setMode("idle")} style={{ padding:"6px 10px", borderRadius:8, cursor:"pointer", background:"rgba(255,255,255,0.04)", border:"none", color:"rgba(148,163,184,0.45)", fontSize:"0.6rem", fontFamily:"Poppins, sans-serif" }}>Cerrar</button>
+      </div>
+    </div>
+  );
+}
+
+function CalendarioSection({ schedule, companies, accessToken, onToast, onRefresh }: {
+  schedule: ScheduleEntry[]; companies: Company[]; accessToken: string;
+  onToast:(m:string)=>void; onRefresh:()=>Promise<void>;
+}) {
+  const [showInstitutional, setShowInstitutional] = useState(false);
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
@@ -360,7 +478,9 @@ function CalendarioSection({ schedule }: { schedule: ScheduleEntry[] }) {
     .sort((a,b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime());
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:20 }}>
-      <SectionHeader title="Calendario" subtitle={monthLabel}/>
+      <SectionHeader title="Calendario" subtitle={monthLabel}
+        action={<button onClick={()=>setShowInstitutional(s=>!s)} style={{ padding:"8px 16px", borderRadius:11, fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif", cursor:"pointer", background:"rgba(139,92,246,0.12)", borderTop:"1px solid rgba(139,92,246,0.4)", borderRight:"1px solid rgba(139,92,246,0.4)", borderBottom:"1px solid rgba(139,92,246,0.4)", borderLeft:"1px solid rgba(139,92,246,0.4)", color:"#8b5cf6" }}>+ Programar institucional</button>}/>
+      {showInstitutional && <InstitutionalCaseForm companies={companies} accessToken={accessToken} onToast={onToast} onCreated={onRefresh} onClose={()=>setShowInstitutional(false)}/>}
       <GlassCard accent="#3BF6E5">
         <div style={{ padding:"20px" }}>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:4, marginBottom:8 }}>
@@ -387,12 +507,13 @@ function CalendarioSection({ schedule }: { schedule: ScheduleEntry[] }) {
           {upcoming.length === 0
             ? <p style={{ fontSize:"0.7rem", color:"rgba(148,163,184,0.55)", fontFamily:"Poppins, sans-serif" }}>No hay evaluaciones programadas en la agenda.</p>
             : (
-              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
                 {upcoming.map(entry=>(
-                  <div key={`${entry.caseId}-${entry.scheduledFor}`} style={{ display:"flex", alignItems:"center", gap:10 }}>
+                  <div key={`${entry.caseId}-${entry.scheduledFor}`} style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", paddingBottom:8, borderBottom:"1px solid rgba(255,255,255,0.04)" }}>
                     <span style={{ fontSize:"0.58rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.3)", flexShrink:0, width:80 }}>{new Date(entry.scheduledFor).toLocaleDateString("es-DO",{day:"2-digit",month:"short"})}</span>
                     <span style={{ width:7, height:7, borderRadius:"50%", background:"#3BF6E5", flexShrink:0, boxShadow:"0 0 6px #3BF6E5" }}/>
-                    <span style={{ fontSize:"0.7rem", color:"rgba(148,163,184,0.55)", fontFamily:"Poppins, sans-serif" }}>{entry.companyName} · CAS-{entry.caseId} · {new Date(entry.scheduledFor).toLocaleTimeString("es-DO",{hour:"2-digit",minute:"2-digit"})}</span>
+                    <span style={{ fontSize:"0.7rem", color:"rgba(148,163,184,0.55)", fontFamily:"Poppins, sans-serif", flex:1, minWidth:180 }}>{entry.companyName} · CAS-{entry.caseId} · {new Date(entry.scheduledFor).toLocaleTimeString("es-DO",{hour:"2-digit",minute:"2-digit"})}</span>
+                    <ScheduleActions entry={entry} accessToken={accessToken} onToast={onToast} onRefresh={onRefresh}/>
                   </div>
                 ))}
               </div>
@@ -406,22 +527,80 @@ function CalendarioSection({ schedule }: { schedule: ScheduleEntry[] }) {
 /* ─────────────────────────────────────────────────────────────────────
    Section: Alertas
 ───────────────────────────────────────────────────────────────────── */
-function AlertasSection({ alertas, onToast }:{ alertas:AlertaItem[]; onToast:(m:string)=>void }) {
+const fieldBoxStyle: React.CSSProperties = { width:"100%", borderRadius:11, padding:"10px 12px", background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"#f1f5f9", fontFamily:"Poppins, sans-serif", fontSize:"0.78rem", outline:"none", boxSizing:"border-box" };
+const fieldLabelStyle: React.CSSProperties = { fontSize:"0.55rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif", marginBottom:5, display:"block", textTransform:"uppercase", letterSpacing:"0.06em", fontWeight:700 };
+
+function AlertasSection({ alertas, companies, accessToken, onToast, onCreated, onDecided }:{
+  alertas:AlertaItem[]; companies:Company[]; accessToken:string;
+  onToast:(m:string)=>void; onCreated:()=>Promise<void>; onDecided:()=>Promise<void>;
+}) {
   const [showForm, setShowForm] = useState(false);
+  const [numero, setNumero] = useState(""); const [producto, setProducto] = useState("");
+  const [companyId, setCompanyId] = useState<string>(""); const [desc, setDesc] = useState("");
+  const [submitting, setSubmitting] = useState(false); const [formError, setFormError] = useState("");
+  const [decidingId, setDecidingId] = useState<number|null>(null);
+
+  const resetForm = () => { setNumero(""); setProducto(""); setCompanyId(""); setDesc(""); setFormError(""); };
+
+  const handleRegister = async () => {
+    if (!numero.trim() || !producto.trim() || !companyId || !desc.trim()) {
+      setFormError("Completa todos los campos para registrar la alerta."); return;
+    }
+    setSubmitting(true); setFormError("");
+    try {
+      await createAlert(accessToken, {
+        alertNumber: numero, product: producto, companyId: Number(companyId),
+        description: desc, receivedAt: new Date().toISOString(),
+      });
+      await onCreated();
+      onToast("Alerta registrada correctamente");
+      resetForm(); setShowForm(false);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "No fue posible registrar la alerta.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDecide = async (id: number, result: AlertDecisionResult, reason: string) => {
+    setDecidingId(id);
+    try {
+      const outcome = await decideAlert(accessToken, id, { result, reason });
+      await onDecided();
+      onToast(outcome.caseId ? `Evaluación generada · expediente CAS-${outcome.caseId}` : "Decisión registrada");
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "No fue posible registrar la decisión.");
+    } finally {
+      setDecidingId(null);
+    }
+  };
+
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
       <SectionHeader title="Alertas LAPCH" subtitle={`${alertas.filter(a=>a.estado==="Activa").length} alertas activas`}
         action={<button onClick={()=>setShowForm(s=>!s)} style={{ padding:"8px 16px", borderRadius:11, fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif", cursor:"pointer", background:"rgba(229,59,246,0.12)", borderTop:"1px solid rgba(229,59,246,0.4)", borderRight:"1px solid rgba(229,59,246,0.4)", borderBottom:"1px solid rgba(229,59,246,0.4)", borderLeft:"1px solid rgba(229,59,246,0.4)", color:"#E53BF6" }}>+ Registrar alerta</button>}/>
       {showForm && <GlassCard accent="#E53BF6"><div style={{ padding:"18px 20px", display:"flex", flexDirection:"column", gap:12 }}>
         <p style={{ fontSize:"0.65rem", fontWeight:700, color:"#E53BF6", fontFamily:"Poppins, sans-serif", textTransform:"uppercase", letterSpacing:"0.1em" }}>Nueva Alerta LAPCH</p>
-        {["Número de alerta","Producto afectado","Empresa","Descripción"].map(f=><div key={f} style={{ borderRadius:11, padding:"10px 12px", background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)" }}><p style={{ fontSize:"0.55rem", color:"rgba(148,163,184,0.35)", fontFamily:"Poppins, sans-serif" }}>{f}</p></div>)}
+        <div><label style={fieldLabelStyle}>Número de alerta</label><input value={numero} onChange={e=>setNumero(e.target.value)} style={fieldBoxStyle} placeholder="LAPCH-2026-001"/></div>
+        <div><label style={fieldLabelStyle}>Producto afectado</label><input value={producto} onChange={e=>setProducto(e.target.value)} style={fieldBoxStyle}/></div>
+        <div><label style={fieldLabelStyle}>Empresa</label>
+          <select value={companyId} onChange={e=>setCompanyId(e.target.value)} style={fieldBoxStyle}>
+            <option value="">Selecciona una empresa…</option>
+            {companies.map(c=><option key={c.id} value={c.id}>{c.tradeName}</option>)}
+          </select>
+        </div>
+        <div><label style={fieldLabelStyle}>Descripción</label><textarea value={desc} onChange={e=>setDesc(e.target.value)} rows={3} style={{ ...fieldBoxStyle, resize:"vertical" }}/></div>
+        {formError && <p role="alert" style={{ fontSize:"0.68rem", color:"#fda4af", fontFamily:"Poppins, sans-serif" }}>{formError}</p>}
         <div style={{ display:"flex", gap:8 }}>
-          <button onClick={()=>{ onToast("Alerta registrada correctamente"); setShowForm(false); }} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:"pointer", background:"rgba(229,59,246,0.12)", borderTop:"1px solid rgba(229,59,246,0.4)", borderRight:"1px solid rgba(229,59,246,0.4)", borderBottom:"1px solid rgba(229,59,246,0.4)", borderLeft:"1px solid rgba(229,59,246,0.4)", color:"#E53BF6", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Registrar</button>
-          <button onClick={()=>setShowForm(false)} style={{ padding:"9px 16px", borderRadius:10, cursor:"pointer", background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.4)", fontSize:"0.72rem", fontFamily:"Poppins, sans-serif" }}>Cancelar</button>
+          <button onClick={handleRegister} disabled={submitting} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:submitting?"not-allowed":"pointer", opacity:submitting?0.7:1, background:"rgba(229,59,246,0.12)", borderTop:"1px solid rgba(229,59,246,0.4)", borderRight:"1px solid rgba(229,59,246,0.4)", borderBottom:"1px solid rgba(229,59,246,0.4)", borderLeft:"1px solid rgba(229,59,246,0.4)", color:"#E53BF6", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>{submitting?"Registrando…":"Registrar"}</button>
+          <button onClick={()=>{ resetForm(); setShowForm(false); }} style={{ padding:"9px 16px", borderRadius:10, cursor:"pointer", background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.4)", fontSize:"0.72rem", fontFamily:"Poppins, sans-serif" }}>Cancelar</button>
         </div>
       </div></GlassCard>}
+      {alertas.length === 0 && <p style={{ color:"rgba(148,163,184,0.55)", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>No hay alertas LAPCH registradas.</p>}
       {alertas.map(al=>{
         const r=ALERT_RESULT[al.resultado];
+        const isPending = al.estado === "Activa";
+        const isDeciding = decidingId === al.id;
         return <GlassCard key={al.id} accent={r.color}>
           <div style={{ padding:"16px 18px", display:"flex", flexDirection:"column", gap:10 }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
@@ -431,10 +610,10 @@ function AlertasSection({ alertas, onToast }:{ alertas:AlertaItem[]; onToast:(m:
             <p style={{ fontSize:"0.7rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif", lineHeight:1.5 }}>{al.desc}</p>
             <div style={{ display:"flex", gap:8, alignItems:"center", justifyContent:"space-between" }}>
               <span style={{ fontSize:"0.58rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif" }}>{al.fecha}</span>
-              <div style={{ display:"flex", gap:7 }}>
-                {al.resultado==="Procede" && <button onClick={()=>onToast("Evaluación generada · "+al.numero)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(239,68,68,0.1)", borderTop:"1px solid rgba(239,68,68,0.35)", borderRight:"1px solid rgba(239,68,68,0.35)", borderBottom:"1px solid rgba(239,68,68,0.35)", borderLeft:"1px solid rgba(239,68,68,0.35)", color:"#ef4444", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Generar evaluación</button>}
-                <button onClick={()=>onToast("Caso cerrado · "+al.numero)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.4)", fontSize:"0.62rem", fontFamily:"Poppins, sans-serif" }}>Cerrar caso</button>
-              </div>
+              {isPending && <div style={{ display:"flex", gap:7 }}>
+                <button onClick={()=>handleDecide(al.id, "PROCEED", "Alerta procede: se genera evaluación")} disabled={isDeciding} style={{ padding:"5px 12px", borderRadius:9, cursor:isDeciding?"not-allowed":"pointer", opacity:isDeciding?0.6:1, background:"rgba(239,68,68,0.1)", borderTop:"1px solid rgba(239,68,68,0.35)", borderRight:"1px solid rgba(239,68,68,0.35)", borderBottom:"1px solid rgba(239,68,68,0.35)", borderLeft:"1px solid rgba(239,68,68,0.35)", color:"#ef4444", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Generar evaluación</button>
+                <button onClick={()=>handleDecide(al.id, "NOT_PROCEED", "Alerta no procede")} disabled={isDeciding} style={{ padding:"5px 12px", borderRadius:9, cursor:isDeciding?"not-allowed":"pointer", opacity:isDeciding?0.6:1, background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.5)", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>No procede</button>
+              </div>}
             </div>
           </div>
         </GlassCard>;
@@ -446,23 +625,88 @@ function AlertasSection({ alertas, onToast }:{ alertas:AlertaItem[]; onToast:(m:
 /* ─────────────────────────────────────────────────────────────────────
    Section: Denuncias
 ───────────────────────────────────────────────────────────────────── */
-function DenunciasSection({ denuncias, onToast }:{ denuncias:DenunciaItem[]; onToast:(m:string)=>void }) {
+function DenunciasSection({ denuncias, companies, accessToken, onToast, onCreated, onDecided }:{
+  denuncias:DenunciaItem[]; companies:Company[]; accessToken:string;
+  onToast:(m:string)=>void; onCreated:()=>Promise<void>; onDecided:()=>Promise<void>;
+}) {
+  const [showForm, setShowForm] = useState(false);
+  const [tipo, setTipo] = useState(""); const [denunciante, setDenunciante] = useState("");
+  const [companyId, setCompanyId] = useState<string>(""); const [desc, setDesc] = useState("");
+  const [submitting, setSubmitting] = useState(false); const [formError, setFormError] = useState("");
+  const [decidingId, setDecidingId] = useState<number|null>(null);
+
+  const resetForm = () => { setTipo(""); setDenunciante(""); setCompanyId(""); setDesc(""); setFormError(""); };
+
+  const handleRegister = async () => {
+    if (!tipo.trim() || !denunciante.trim() || !desc.trim()) {
+      setFormError("Completa tipo, denunciante y descripción para registrar la denuncia."); return;
+    }
+    setSubmitting(true); setFormError("");
+    try {
+      await createComplaint(accessToken, {
+        complaintType: tipo, complainant: denunciante, description: desc,
+        companyId: companyId ? Number(companyId) : null, receivedAt: new Date().toISOString(),
+      });
+      await onCreated();
+      onToast("Denuncia registrada correctamente");
+      resetForm(); setShowForm(false);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "No fue posible registrar la denuncia.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDecide = async (id: number, result: ComplaintDecisionResult, reason: string) => {
+    setDecidingId(id);
+    try {
+      const outcome = await decideComplaint(accessToken, id, { result, reason });
+      await onDecided();
+      onToast(outcome.caseId ? `Evaluación generada · expediente CAS-${outcome.caseId}` : "Decisión registrada");
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "No fue posible registrar la decisión.");
+    } finally {
+      setDecidingId(null);
+    }
+  };
+
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
       <SectionHeader title="Denuncias" subtitle={`${denuncias.filter(d=>d.estado==="Activa").length} activas`}
-        action={<button onClick={()=>onToast("Formulario de denuncia abierto")} style={{ padding:"8px 16px", borderRadius:11, fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif", cursor:"pointer", background:"rgba(246,229,59,0.1)", borderTop:"1px solid rgba(246,229,59,0.38)", borderRight:"1px solid rgba(246,229,59,0.38)", borderBottom:"1px solid rgba(246,229,59,0.38)", borderLeft:"1px solid rgba(246,229,59,0.38)", color:"#F6E53B" }}>+ Registrar denuncia</button>}/>
+        action={<button onClick={()=>setShowForm(s=>!s)} style={{ padding:"8px 16px", borderRadius:11, fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif", cursor:"pointer", background:"rgba(246,229,59,0.1)", borderTop:"1px solid rgba(246,229,59,0.38)", borderRight:"1px solid rgba(246,229,59,0.38)", borderBottom:"1px solid rgba(246,229,59,0.38)", borderLeft:"1px solid rgba(246,229,59,0.38)", color:"#F6E53B" }}>+ Registrar denuncia</button>}/>
+      {showForm && <GlassCard accent="#F6E53B"><div style={{ padding:"18px 20px", display:"flex", flexDirection:"column", gap:12 }}>
+        <p style={{ fontSize:"0.65rem", fontWeight:700, color:"#F6E53B", fontFamily:"Poppins, sans-serif", textTransform:"uppercase", letterSpacing:"0.1em" }}>Nueva Denuncia</p>
+        <div><label style={fieldLabelStyle}>Tipo de denuncia</label><input value={tipo} onChange={e=>setTipo(e.target.value)} style={fieldBoxStyle} placeholder="Higiene, rotulado, etc."/></div>
+        <div><label style={fieldLabelStyle}>Denunciante</label><input value={denunciante} onChange={e=>setDenunciante(e.target.value)} style={fieldBoxStyle} placeholder="Nombre o Anónimo"/></div>
+        <div><label style={fieldLabelStyle}>Empresa (opcional)</label>
+          <select value={companyId} onChange={e=>setCompanyId(e.target.value)} style={fieldBoxStyle}>
+            <option value="">Sin asociar todavía…</option>
+            {companies.map(c=><option key={c.id} value={c.id}>{c.tradeName}</option>)}
+          </select>
+        </div>
+        <div><label style={fieldLabelStyle}>Descripción</label><textarea value={desc} onChange={e=>setDesc(e.target.value)} rows={3} style={{ ...fieldBoxStyle, resize:"vertical" }}/></div>
+        {formError && <p role="alert" style={{ fontSize:"0.68rem", color:"#fda4af", fontFamily:"Poppins, sans-serif" }}>{formError}</p>}
+        <div style={{ display:"flex", gap:8 }}>
+          <button onClick={handleRegister} disabled={submitting} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:submitting?"not-allowed":"pointer", opacity:submitting?0.7:1, background:"rgba(246,229,59,0.1)", borderTop:"1px solid rgba(246,229,59,0.38)", borderRight:"1px solid rgba(246,229,59,0.38)", borderBottom:"1px solid rgba(246,229,59,0.38)", borderLeft:"1px solid rgba(246,229,59,0.38)", color:"#F6E53B", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>{submitting?"Registrando…":"Registrar"}</button>
+          <button onClick={()=>{ resetForm(); setShowForm(false); }} style={{ padding:"9px 16px", borderRadius:10, cursor:"pointer", background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.4)", fontSize:"0.72rem", fontFamily:"Poppins, sans-serif" }}>Cancelar</button>
+        </div>
+      </div></GlassCard>}
+      {denuncias.length === 0 && <p style={{ color:"rgba(148,163,184,0.55)", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>No hay denuncias registradas.</p>}
       {denuncias.map(d=>{
         const r=ALERT_RESULT[d.resultado];
+        const isPending = d.estado === "Activa";
+        const isDeciding = decidingId === d.id;
         return <GlassCard key={d.id} accent={r.color}><div style={{ padding:"16px 18px", display:"flex", flexDirection:"column", gap:10 }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
             <div><span style={{ fontSize:"0.52rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.25)" }}>{d.codigo}</span><p style={{ fontSize:"0.88rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{d.tipo}</p><p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>Recibida: {d.fechaRec}</p></div>
             <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:5 }}><Chip label={d.resultado} color={r.color} bg={r.bg} border={r.border}/><span style={{ fontSize:"0.55rem", color:d.estado==="Activa"?"#22c55e":"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif", fontWeight:600 }}>{d.estado}</span></div>
           </div>
           <p style={{ fontSize:"0.7rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif", lineHeight:1.5 }}>{d.desc}</p>
-          <div style={{ display:"flex", justifyContent:"flex-end", gap:7 }}>
-            {d.resultado!=="No Procede" && <button onClick={()=>onToast("Evaluación generada · "+d.codigo)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(229,59,246,0.1)", borderTop:"1px solid rgba(229,59,246,0.35)", borderRight:"1px solid rgba(229,59,246,0.35)", borderBottom:"1px solid rgba(229,59,246,0.35)", borderLeft:"1px solid rgba(229,59,246,0.35)", color:"#E53BF6", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Generar evaluación</button>}
-            <button onClick={()=>onToast("Denuncia remitida · "+d.codigo)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.4)", fontSize:"0.62rem", fontFamily:"Poppins, sans-serif" }}>Remitir</button>
-          </div>
+          {isPending && <div style={{ display:"flex", justifyContent:"flex-end", gap:7, flexWrap:"wrap" }}>
+            <button onClick={()=>handleDecide(d.id, "PROCEED", "Denuncia procede: se genera evaluación")} disabled={isDeciding} style={{ padding:"5px 12px", borderRadius:9, cursor:isDeciding?"not-allowed":"pointer", opacity:isDeciding?0.6:1, background:"rgba(229,59,246,0.1)", borderTop:"1px solid rgba(229,59,246,0.35)", borderRight:"1px solid rgba(229,59,246,0.35)", borderBottom:"1px solid rgba(229,59,246,0.35)", borderLeft:"1px solid rgba(229,59,246,0.35)", color:"#E53BF6", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Generar evaluación</button>
+            <button onClick={()=>handleDecide(d.id, "REFERRED", "Denuncia remitida a otra instancia")} disabled={isDeciding} style={{ padding:"5px 12px", borderRadius:9, cursor:isDeciding?"not-allowed":"pointer", opacity:isDeciding?0.6:1, background:"rgba(59,246,229,0.08)", borderTop:"1px solid rgba(59,246,229,0.3)", borderRight:"1px solid rgba(59,246,229,0.3)", borderBottom:"1px solid rgba(59,246,229,0.3)", borderLeft:"1px solid rgba(59,246,229,0.3)", color:"#3BF6E5", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Remitir</button>
+            <button onClick={()=>handleDecide(d.id, "NOT_PROCEED", "Denuncia no procede")} disabled={isDeciding} style={{ padding:"5px 12px", borderRadius:9, cursor:isDeciding?"not-allowed":"pointer", opacity:isDeciding?0.6:1, background:"rgba(255,255,255,0.04)", borderTop:"1px solid rgba(255,255,255,0.09)", borderRight:"1px solid rgba(255,255,255,0.09)", borderBottom:"1px solid rgba(255,255,255,0.09)", borderLeft:"1px solid rgba(255,255,255,0.09)", color:"rgba(148,163,184,0.4)", fontSize:"0.62rem", fontFamily:"Poppins, sans-serif" }}>No procede</button>
+          </div>}
         </div></GlassCard>;
       })}
     </div>
@@ -542,7 +786,7 @@ function AsignacionesSection({ casos, onOpenCaso }: {
 function AsignarCasoSection({ caso, technicians, onConfirm, onBack }: {
   caso: Caso;
   technicians: Tecnico[];
-  onConfirm: (tech: Tecnico, reason: string) => Promise<void>;
+  onConfirm: (tech: Tecnico, reason: string, schedule?: { scheduledFor: string; observations?: string }) => Promise<void>;
   onBack: () => void;
 }) {
   const [selectedTechId, setSelectedTechId] = useState<string|null>(null);
@@ -562,8 +806,11 @@ function AsignarCasoSection({ caso, technicians, onConfirm, onBack }: {
     setAssignError("");
     const reason = obs.trim() ||
       (isReassignment ? "Reasignación desde el panel del coordinador" : "Asignación desde el panel del coordinador");
+    const schedule = fechaProg && horaProg
+      ? { scheduledFor: new Date(`${fechaProg}T${horaProg}`).toISOString(), observations: obs.trim() || undefined }
+      : undefined;
     try {
-      await onConfirm(selectedTech, reason);
+      await onConfirm(selectedTech, reason, schedule);
     } catch (error) {
       setAssignError(error instanceof Error ? error.message : "No fue posible confirmar la asignación.");
       setConfirming(false);
@@ -783,27 +1030,271 @@ function ConfirmacionSection({ caso, tecnico, onGoAsignaciones, onGoInicio }: {
 /* ─────────────────────────────────────────────────────────────────────
    Section: Reportes
 ───────────────────────────────────────────────────────────────────── */
-function ReportesSection({ casos, loading, error }:{ casos:Caso[]; loading:boolean; error:string }) {
-  /* Expedientes en fase de informe/revisión, derivados de /api/cases. La
-     aprobación/devolución de cada informe se realiza en el detalle de la
-     evaluación (`POST /api/evaluations/{id}/report/review`). */
-  const rows = casos.filter(c => c.estado === "En Revisión");
+/* Estados de expediente en los que ya existe (o existió) un informe que revisar (RF-17 a RF-19). */
+const REPORT_RELEVANT_STATUSES = ["IN_REVIEW", "CORRECTION_REQUIRED", "APPROVED", "CLOSED"];
+const REPORT_STATUS_LABEL: Record<string,string> = {
+  ISSUED: "Pendiente de revisión", APPROVED: "Aprobado", RETURNED: "Devuelto",
+  CORRECTION_REQUESTED: "Corrección solicitada",
+};
+
+function ReportReviewDetail({ caso, accessToken, onBack, onToast, onRefresh }: {
+  caso: Caso; accessToken: string; onBack: ()=>void; onToast:(m:string)=>void; onRefresh:()=>Promise<void>;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [evaluationId, setEvaluationId] = useState<number|null>(null);
+  const [report, setReport] = useState<EvaluationReport|null>(null);
+  const [result, setResult] = useState<EvaluationResult|null>(null);
+  const [reviews, setReviews] = useState<EvaluationReportReview[]>([]);
+  const [official, setOfficial] = useState<OfficialReport|null>(null);
+  const [acting, setActing] = useState(false);
+  const [observations, setObservations] = useState("");
+  const [closeResult, setCloseResult] = useState("");
+  const [confirmingClose, setConfirmingClose] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setLoadError("");
+    (async () => {
+      const myCases = await listMyCases(accessToken);
+      const match = myCases.find(row => row.id === caso.rawId);
+      if (!match || match.evaluationInstanceId == null) {
+        throw new Error("Este expediente todavía no tiene una evaluación iniciada.");
+      }
+      const evalId = match.evaluationInstanceId;
+      const [reportData, reviewsData, resultData] = await Promise.all([
+        getCurrentReport(accessToken, evalId),
+        listReportReviews(accessToken, evalId),
+        getEvaluationResult(accessToken, evalId).catch(() => null),
+      ]);
+      if (cancelled) return;
+      setEvaluationId(evalId);
+      setReport(reportData);
+      setReviews(reviewsData);
+      setResult(resultData);
+    })()
+      .catch(err => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "No fue posible cargar el informe."); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [accessToken, caso.rawId]);
+
+  const handleDecision = async (decision: ReportReviewDecision) => {
+    if (!evaluationId) return;
+    if (decision !== "APPROVED" && !observations.trim()) {
+      onToast("Las observaciones son obligatorias para devolver el informe o pedir corrección.");
+      return;
+    }
+    setActing(true);
+    try {
+      await reviewReport(accessToken, evaluationId, { decision, observations });
+      onToast(decision === "APPROVED" ? "Informe aprobado" : "Informe devuelto al técnico");
+      const [reportData, reviewsData] = await Promise.all([
+        getCurrentReport(accessToken, evaluationId), listReportReviews(accessToken, evaluationId),
+      ]);
+      setReport(reportData); setReviews(reviewsData); setObservations("");
+      await onRefresh();
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "No fue posible registrar la revisión.");
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const handleGeneratePdf = async () => {
+    if (!evaluationId) return;
+    setActing(true);
+    try {
+      const generated = await generateOfficialReport(accessToken, evaluationId);
+      setOfficial(generated);
+      onToast("PDF oficial generado");
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "No fue posible generar el PDF oficial.");
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const handleDownload = async () => {
+    if (!evaluationId) return;
+    setActing(true);
+    try {
+      const { blob, fileName } = await downloadOfficialReport(accessToken, evaluationId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url; link.download = fileName;
+      document.body.appendChild(link); link.click(); document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      onToast("Descarga del PDF oficial iniciada");
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "No fue posible descargar el PDF oficial. Genera el PDF primero.");
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const handleClose = async () => {
+    if (!closeResult.trim()) { onToast("Indica el resultado del cierre."); return; }
+    setActing(true);
+    try {
+      await closeCase(accessToken, caso.rawId, { result: closeResult });
+      onToast("Expediente cerrado");
+      setConfirmingClose(false);
+      await onRefresh();
+      onBack();
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "No fue posible cerrar el expediente.");
+    } finally {
+      setActing(false);
+    }
+  };
+
+  const isApproved = report?.status === "APPROVED";
+  const isClosed = caso.rawStatus === "CLOSED";
+  const isPendingReview = report?.status === "ISSUED";
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:16, maxWidth:760 }}>
+      <button onClick={onBack} style={{ display:"inline-flex", alignItems:"center", gap:8, background:"none", border:"none", cursor:"pointer", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif", fontSize:"0.75rem", fontWeight:500, padding:0 }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M19 12H5M12 19l-7-7 7-7" stroke="rgba(148,163,184,0.5)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        Volver a Reportes
+      </button>
+      <SectionHeader title={`Informe · ${caso.id}`} subtitle={`${caso.empresa} · ${caso.tipo}`}/>
+
+      {loading && <p style={{ color:"#94a3b8", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>Cargando informe…</p>}
+      {loadError && !loading && <p role="alert" style={{ color:"#fda4af", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>{loadError}</p>}
+
+      {!loading && !loadError && !report && (
+        <p style={{ color:"rgba(148,163,184,0.55)", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>El técnico todavía no ha emitido el informe de este expediente.</p>
+      )}
+
+      {!loading && !loadError && report && (
+        <>
+          <GlassCard accent="#8b5cf6"><div style={{ padding:"18px 20px", display:"flex", flexDirection:"column", gap:12 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <span style={{ fontSize:"0.6rem", fontWeight:700, color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif", textTransform:"uppercase", letterSpacing:"0.08em" }}>Versión {report.version}</span>
+              <Chip label={REPORT_STATUS_LABEL[report.status] ?? report.status} color="#8b5cf6" bg="rgba(139,92,246,0.1)" border="rgba(139,92,246,0.35)"/>
+            </div>
+            <div><p style={fieldLabelStyle}>Resumen ejecutivo</p><p style={{ fontSize:"0.78rem", color:"#f1f5f9", fontFamily:"Poppins, sans-serif", lineHeight:1.6 }}>{report.executiveSummary}</p></div>
+            <div><p style={fieldLabelStyle}>Hallazgos</p><p style={{ fontSize:"0.78rem", color:"#f1f5f9", fontFamily:"Poppins, sans-serif", lineHeight:1.6 }}>{report.findings}</p></div>
+            <div><p style={fieldLabelStyle}>Recomendaciones</p><p style={{ fontSize:"0.78rem", color:"#f1f5f9", fontFamily:"Poppins, sans-serif", lineHeight:1.6 }}>{report.recommendations}</p></div>
+          </div></GlassCard>
+
+          {result && (
+            <GlassCard accent="#3BF6E5"><div style={{ padding:"18px 20px" }}>
+              <p style={{ ...fieldLabelStyle, marginBottom:12 }}>Resultado calculado (RF-14)</p>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(120px, 1fr))", gap:12 }}>
+                {[
+                  { label:"% BPM", v:`${result.bpmPercentage.toFixed(2)}%` },
+                  { label:"Calificación", v:result.qualificationCode },
+                  { label:"Clasificación", v:result.classification },
+                  { label:"Riesgo", v:result.riskLevel },
+                  { label:"Frecuencia", v:`${result.frequencyMonths} meses` },
+                  { label:"No conformidades", v:`${result.criticalCount + result.majorCount + result.minorCount} (${result.criticalCount} críticas)` },
+                ].map(f=>(
+                  <div key={f.label}>
+                    <p style={{ fontSize:"0.52rem", color:"rgba(148,163,184,0.35)", fontFamily:"Poppins, sans-serif", textTransform:"uppercase", letterSpacing:"0.06em" }}>{f.label}</p>
+                    <p style={{ fontSize:"0.85rem", fontWeight:700, color:"#3BF6E5", fontFamily:"Poppins, sans-serif" }}>{f.v}</p>
+                  </div>
+                ))}
+              </div>
+            </div></GlassCard>
+          )}
+
+          {reviews.length > 0 && (
+            <GlassCard><div style={{ padding:"16px 20px" }}>
+              <p style={{ ...fieldLabelStyle, marginBottom:10 }}>Historial de revisiones</p>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {reviews.map(rv=>(
+                  <div key={rv.id} style={{ fontSize:"0.68rem", color:"rgba(148,163,184,0.55)", fontFamily:"Poppins, sans-serif" }}>
+                    <strong style={{ color:"#f1f5f9" }}>v{rv.reportVersion} · {REPORT_STATUS_LABEL[rv.decision] ?? rv.decision}</strong>
+                    {rv.observations && <> — {rv.observations}</>}
+                    <span style={{ color:"rgba(148,163,184,0.3)" }}> ({formatFecha(rv.reviewedAt)})</span>
+                  </div>
+                ))}
+              </div>
+            </div></GlassCard>
+          )}
+
+          {isPendingReview && (
+            <GlassCard accent="#E53BF6"><div style={{ padding:"18px 20px", display:"flex", flexDirection:"column", gap:12 }}>
+              <p style={{ ...fieldLabelStyle, color:"#E53BF6" }}>Decisión del coordinador</p>
+              <div><label style={fieldLabelStyle}>Observaciones (obligatorias para devolver o pedir corrección)</label>
+                <textarea value={observations} onChange={e=>setObservations(e.target.value)} rows={3} style={{ ...fieldBoxStyle, resize:"vertical" }}/>
+              </div>
+              <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                <button onClick={()=>handleDecision("APPROVED")} disabled={acting} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:acting?"not-allowed":"pointer", opacity:acting?0.7:1, background:"rgba(34,197,94,0.12)", borderTop:"1px solid rgba(34,197,94,0.4)", borderRight:"1px solid rgba(34,197,94,0.4)", borderBottom:"1px solid rgba(34,197,94,0.4)", borderLeft:"1px solid rgba(34,197,94,0.4)", color:"#22c55e", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Aprobar</button>
+                <button onClick={()=>handleDecision("RETURNED")} disabled={acting} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:acting?"not-allowed":"pointer", opacity:acting?0.7:1, background:"rgba(246,229,59,0.1)", borderTop:"1px solid rgba(246,229,59,0.38)", borderRight:"1px solid rgba(246,229,59,0.38)", borderBottom:"1px solid rgba(246,229,59,0.38)", borderLeft:"1px solid rgba(246,229,59,0.38)", color:"#F6E53B", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Devolver</button>
+                <button onClick={()=>handleDecision("CORRECTION_REQUESTED")} disabled={acting} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:acting?"not-allowed":"pointer", opacity:acting?0.7:1, background:"rgba(239,68,68,0.1)", borderTop:"1px solid rgba(239,68,68,0.35)", borderRight:"1px solid rgba(239,68,68,0.35)", borderBottom:"1px solid rgba(239,68,68,0.35)", borderLeft:"1px solid rgba(239,68,68,0.35)", color:"#ef4444", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Solicitar corrección</button>
+              </div>
+            </div></GlassCard>
+          )}
+
+          {isApproved && (
+            <GlassCard accent="#22c55e"><div style={{ padding:"18px 20px", display:"flex", flexDirection:"column", gap:12 }}>
+              <p style={{ ...fieldLabelStyle, color:"#22c55e" }}>Informe oficial y cierre (RF-19)</p>
+              {official && <p style={{ fontSize:"0.68rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>{official.fileName} · {(official.sizeBytes/1024).toFixed(0)} KB · sha256 {official.sha256.slice(0,12)}…</p>}
+              <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                <button onClick={handleGeneratePdf} disabled={acting} style={{ padding:"9px 16px", borderRadius:10, cursor:acting?"not-allowed":"pointer", opacity:acting?0.7:1, background:"rgba(34,197,94,0.1)", borderTop:"1px solid rgba(34,197,94,0.35)", borderRight:"1px solid rgba(34,197,94,0.35)", borderBottom:"1px solid rgba(34,197,94,0.35)", borderLeft:"1px solid rgba(34,197,94,0.35)", color:"#22c55e", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Generar PDF oficial</button>
+                <button onClick={handleDownload} disabled={acting} style={{ padding:"9px 16px", borderRadius:10, cursor:acting?"not-allowed":"pointer", opacity:acting?0.7:1, background:"rgba(59,246,229,0.08)", borderTop:"1px solid rgba(59,246,229,0.3)", borderRight:"1px solid rgba(59,246,229,0.3)", borderBottom:"1px solid rgba(59,246,229,0.3)", borderLeft:"1px solid rgba(59,246,229,0.3)", color:"#3BF6E5", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Descargar PDF</button>
+              </div>
+
+              {!isClosed && (
+                <div style={{ marginTop:6, paddingTop:14, borderTop:"1px solid rgba(255,255,255,0.06)", display:"flex", flexDirection:"column", gap:10 }}>
+                  <p style={{ fontSize:"0.65rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>Cerrar el expediente es irreversible y exige el informe aprobado y el PDF oficial ya emitido.</p>
+                  <div><label style={fieldLabelStyle}>Resultado del cierre</label><textarea value={closeResult} onChange={e=>setCloseResult(e.target.value)} rows={2} style={{ ...fieldBoxStyle, resize:"vertical" }}/></div>
+                  {!confirmingClose
+                    ? <button onClick={()=>setConfirmingClose(true)} style={{ padding:"9px 16px", borderRadius:10, cursor:"pointer", background:"rgba(239,68,68,0.1)", borderTop:"1px solid rgba(239,68,68,0.35)", borderRight:"1px solid rgba(239,68,68,0.35)", borderBottom:"1px solid rgba(239,68,68,0.35)", borderLeft:"1px solid rgba(239,68,68,0.35)", color:"#ef4444", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif", alignSelf:"flex-start" }}>Cerrar expediente…</button>
+                    : <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                        <span style={{ fontSize:"0.65rem", color:"#fda4af", fontFamily:"Poppins, sans-serif" }}>¿Confirmas el cierre? No se puede deshacer.</span>
+                        <button onClick={handleClose} disabled={acting} style={{ padding:"7px 14px", borderRadius:9, cursor:acting?"not-allowed":"pointer", background:"#ef4444", border:"none", color:"white", fontSize:"0.68rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Sí, cerrar</button>
+                        <button onClick={()=>setConfirmingClose(false)} style={{ padding:"7px 14px", borderRadius:9, cursor:"pointer", background:"rgba(255,255,255,0.04)", border:"none", color:"rgba(148,163,184,0.5)", fontSize:"0.68rem", fontFamily:"Poppins, sans-serif" }}>No</button>
+                      </div>}
+                </div>
+              )}
+              {isClosed && <span style={{ fontSize:"0.65rem", fontWeight:700, color:"#22c55e", fontFamily:"Poppins, sans-serif" }}>✓ Expediente cerrado</span>}
+            </div></GlassCard>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ReportesSection({ casos, loading, error, accessToken, onToast, onRefresh }:{
+  casos:Caso[]; loading:boolean; error:string; accessToken:string;
+  onToast:(m:string)=>void; onRefresh:()=>Promise<void>;
+}) {
+  const [selectedId, setSelectedId] = useState<number|null>(null);
+  /* Expedientes con un informe emitido en algún momento (en revisión, devuelto, aprobado o ya
+     cerrado): la aprobación/devolución/PDF/cierre se ejercen en el detalle de cada uno. */
+  const rows = casos.filter(c => REPORT_RELEVANT_STATUSES.includes(c.rawStatus));
+
+  const selected = selectedId != null ? casos.find(c => c.rawId === selectedId) ?? null : null;
+  if (selected) {
+    return <ReportReviewDetail caso={selected} accessToken={accessToken} onBack={()=>setSelectedId(null)} onToast={onToast} onRefresh={onRefresh}/>;
+  }
+
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-      <SectionHeader title="Reportes" subtitle="Expedientes en fase de informe y revisión"/>
+      <SectionHeader title="Reportes" subtitle="Expedientes en fase de informe, revisión o ya cerrados"/>
       {loading && <p style={{ color:"#94a3b8", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>Cargando expedientes…</p>}
       {error && !loading && <p role="alert" style={{ color:"#fda4af", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>{error}</p>}
-      {!loading && !error && rows.length === 0 && <p style={{ color:"rgba(148,163,184,0.55)", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>No hay expedientes pendientes de informe o revisión.</p>}
+      {!loading && !error && rows.length === 0 && <p style={{ color:"rgba(148,163,184,0.55)", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>No hay expedientes con informe emitido todavía.</p>}
       {rows.map(rep=>(
-        <GlassCard key={rep.id} accent="#8b5cf6">
-          <div style={{ padding:"16px 18px", display:"flex", flexDirection:"column", gap:10 }}>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-              <div><span style={{ fontSize:"0.52rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.25)" }}>{rep.id}</span><p style={{ fontSize:"0.88rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{rep.empresa}</p><p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>{rep.tipo} · {rep.asignado ?? "Sin asignar"}</p></div>
-              <Chip label={rep.estado} color="#8b5cf6" bg="rgba(139,92,246,0.1)" border="rgba(139,92,246,0.35)"/>
+        <button key={rep.id} onClick={()=>setSelectedId(rep.rawId)} style={{ textAlign:"left", cursor:"pointer", border:"none", background:"transparent", padding:0, width:"100%" }}>
+          <GlassCard accent="#8b5cf6">
+            <div style={{ padding:"16px 18px", display:"flex", flexDirection:"column", gap:10 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                <div><span style={{ fontSize:"0.52rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.25)" }}>{rep.id}</span><p style={{ fontSize:"0.88rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{rep.empresa}</p><p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>{rep.tipo} · {rep.asignado ?? "Sin asignar"}</p></div>
+                <Chip label={rep.estado} color="#8b5cf6" bg="rgba(139,92,246,0.1)" border="rgba(139,92,246,0.35)"/>
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <span style={{ fontSize:"0.6rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif" }}>{rep.fecha}</span>
+                <span style={{ fontSize:"0.65rem", fontWeight:700, color:"rgba(139,92,246,0.7)", fontFamily:"Poppins, sans-serif" }}>Ver informe →</span>
+              </div>
             </div>
-            <span style={{ fontSize:"0.6rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif" }}>{rep.fecha}</span>
-          </div>
-        </GlassCard>
+          </GlassCard>
+        </button>
       ))}
     </div>
   );
@@ -915,10 +1406,58 @@ export default function CoordinatorDashboard({
 
   const openCaso = (id: string) => { setSelectedCase(id); navigate("asignar-caso"); };
 
-  const handleConfirmAssignment = async (tech: Tecnico, reason: string) => {
+  const refreshAlerts = async () => {
+    const data = await listAlerts(accessToken);
+    setAlertas(data.map(a => toAlertaItem(a, companiesList)));
+  };
+  const refreshComplaints = async () => {
+    const data = await listComplaints(accessToken);
+    setDenuncias(data.map(toDenunciaItem));
+  };
+  /* Decidir una alerta/denuncia como "procede" genera un expediente nuevo: refresca también casos y
+     métricas para que aparezca de inmediato en Asignaciones/Inicio sin esperar otro ciclo. */
+  const refreshCasesAndMetrics = async () => {
+    const [caseData, dashboardData] = await Promise.all([
+      listCases(accessToken), getDashboard(accessToken).catch(() => null),
+    ]);
+    setCasos(caseData.map(item => toCaso(item, companiesList)));
+    if (dashboardData) setMetrics(dashboardData);
+  };
+  const refreshSchedule = async () => {
+    const data = await listSchedule(
+      accessToken,
+      new Date(Date.now() - 30 * 864e5).toISOString(),
+      new Date(Date.now() + 60 * 864e5).toISOString(),
+    );
+    setSchedule(data);
+    await refreshCasesAndMetrics();
+  };
+
+  const handleConfirmAssignment = async (
+    tech: Tecnico,
+    reason: string,
+    schedule?: { scheduledFor: string; observations?: string },
+  ) => {
     const target = casos.find(c => c.id === selectedCaseId);
     if (!target) return;
     await assignTechnician(accessToken, target.rawId, { technicianId: tech.id, reason });
+    // La asignación (o reasignación) deja el caso en ASSIGNED: cualquier programación anterior ya
+    // quedó cancelada por el backend, así que aquí siempre corresponde una primera programación.
+    if (schedule) {
+      try {
+        await scheduleCase(accessToken, target.rawId, {
+          scheduledFor: schedule.scheduledFor, reason, observations: schedule.observations,
+        });
+        const scheduleData = await listSchedule(
+          accessToken,
+          new Date(Date.now() - 30 * 864e5).toISOString(),
+          new Date(Date.now() + 60 * 864e5).toISOString(),
+        ).catch(() => null);
+        if (scheduleData) setSchedule(scheduleData);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : "El técnico se asignó, pero no fue posible programar la evaluación.");
+      }
+    }
     try {
       const refreshed = await listCases(accessToken);
       setCasos(refreshed.map(item => toCaso(item, companiesList)));
@@ -1031,13 +1570,13 @@ export default function CoordinatorDashboard({
           <div key={section} className="hide-scroll" style={{ flex:1, overflowY:"auto", padding:isMobile?"16px 14px 84px":"24px 28px 36px" }}>
             {section==="inicio"        && <InicioSection onNavigate={navigate} casos={casos} metrics={metrics} activeAlerts={alertas.filter(a=>a.estado==="Activa").length} activeComplaints={denuncias.filter(d=>d.estado==="Activa").length}/>}
             {section==="evaluaciones"  && <EvaluacionesSection casos={casos} loading={casesLoading} error={casesError}/>}
-            {section==="calendario"    && <CalendarioSection schedule={schedule}/>}
-            {section==="alertas"       && <AlertasSection alertas={alertas} onToast={showToast}/>}
-            {section==="denuncias"     && <DenunciasSection denuncias={denuncias} onToast={showToast}/>}
+            {section==="calendario"    && <CalendarioSection schedule={schedule} companies={companiesList} accessToken={accessToken} onToast={showToast} onRefresh={refreshSchedule}/>}
+            {section==="alertas"       && <AlertasSection alertas={alertas} companies={companiesList} accessToken={accessToken} onToast={showToast} onCreated={refreshAlerts} onDecided={async()=>{ await refreshAlerts(); await refreshCasesAndMetrics(); }}/>}
+            {section==="denuncias"     && <DenunciasSection denuncias={denuncias} companies={companiesList} accessToken={accessToken} onToast={showToast} onCreated={refreshComplaints} onDecided={async()=>{ await refreshComplaints(); await refreshCasesAndMetrics(); }}/>}
             {section==="asignaciones"  && <AsignacionesSection casos={casos} onOpenCaso={openCaso}/>}
             {section==="asignar-caso"  && selectedCaso && <AsignarCasoSection caso={selectedCaso} technicians={technicians} onConfirm={handleConfirmAssignment} onBack={()=>navigate("asignaciones")}/>}
             {section==="confirmacion"  && selectedCaso && confirmedTech && <ConfirmacionSection caso={selectedCaso} tecnico={confirmedTech} onGoAsignaciones={()=>navigate("asignaciones")} onGoInicio={()=>navigate("inicio")}/>}
-            {section==="reportes"      && <ReportesSection casos={casos} loading={casesLoading} error={casesError}/>}
+            {section==="reportes"      && <ReportesSection casos={casos} loading={casesLoading} error={casesError} accessToken={accessToken} onToast={showToast} onRefresh={refreshCasesAndMetrics}/>}
             {section==="historico"     && <CaseHistoryPanel accessToken={accessToken}/>}
             {section==="configuracion" && <ConfiguracionSection userName={userName} onToast={showToast}/>}
           </div>
