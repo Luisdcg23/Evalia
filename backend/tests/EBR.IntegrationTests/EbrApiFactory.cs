@@ -1,3 +1,4 @@
+using EBR.Application.Email;
 using EBR.Application.Evidence;
 using EBR.Application.Reports;
 using Microsoft.AspNetCore.Hosting;
@@ -27,6 +28,10 @@ public sealed class EbrApiFactory : WebApplicationFactory<Program>
             // entre fábricas que pueden correr en paralelo (una por clase de prueba).
             services.RemoveAll<IDocumentSigner>();
             services.AddSingleton<IDocumentSigner, InMemoryDocumentSigner>();
+            // Correo: se registra en memoria en vez de enviarse, para que la suite pueda comprobar qué
+            // se habría enviado (destinatario, asunto, cuerpo) sin depender de un proveedor SMTP real.
+            services.RemoveAll<IEmailSender>();
+            services.AddSingleton<IEmailSender, RecordingEmailSender>();
         });
         builder.ConfigureAppConfiguration((_, configuration) =>
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
