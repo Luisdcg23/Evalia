@@ -41,7 +41,8 @@ public sealed class OfficialReportRendererTests
             new("acta-visita.pdf", new string('b', 64), 90_112)
         ],
         ReportIssuedAt: new DateTimeOffset(2026, 9, 1, 14, 30, 0, TimeSpan.Zero),
-        GeneratedAt: generatedAt);
+        GeneratedAt: generatedAt,
+        ApproverFullName: "Coordinadora de Prueba");
 
     private static readonly OfficialReportRenderer Renderer = new();
 
@@ -93,5 +94,8 @@ public sealed class OfficialReportRendererTests
 
         var otherRisk = SampleContent(DateTimeOffset.UtcNow) with { BpmRiskScore = 8.00m };
         Assert.NotEqual(baseline.ContentSha256, Renderer.Render(otherRisk).ContentSha256);
+
+        var otherApprover = SampleContent(DateTimeOffset.UtcNow) with { ApproverFullName = "Otro Coordinador" };
+        Assert.NotEqual(baseline.ContentSha256, Renderer.Render(otherApprover).ContentSha256);
     }
 }

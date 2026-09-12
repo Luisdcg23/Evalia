@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Security.Cryptography;
+using EBR.Application.Email;
 using EBR.Application.Evidence;
 using EBR.Application.Reports;
 using EBR.Domain.Evaluations;
@@ -46,6 +47,11 @@ public static class EvaluationReportEndpoints
             .RequireAuthorization(policy => policy.RequireRole(SystemRoles.Coordinator));
 
         endpoints.MapGet("/api/evaluations/{id:int}/report/official/content", DownloadOfficialAsync)
+            .WithTags("Evaluaciones")
+            .RequireAuthorization(policy => policy.RequireRole(
+                SystemRoles.Evaluator, SystemRoles.Coordinator, SystemRoles.Administrator));
+
+        endpoints.MapGet("/api/evaluations/{id:int}/report/official/verify", VerifyOfficialAsync)
             .WithTags("Evaluaciones")
             .RequireAuthorization(policy => policy.RequireRole(
                 SystemRoles.Evaluator, SystemRoles.Coordinator, SystemRoles.Administrator));
@@ -198,6 +204,8 @@ public static class EvaluationReportEndpoints
         ReviewReportRequest request,
         ClaimsPrincipal principal,
         EbrDbContext context,
+        IEmailSender emailSender,
+        ILogger<Program> logger,
         CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var actingUserId))
@@ -280,7 +288,7 @@ public static class EvaluationReportEndpoints
                 .Select(x => x.UserId).ToListAsync(cancellationToken)
             : await context.CaseAssignments.AsNoTracking().Where(x => x.CaseId == inspectionCase.Id && x.IsCurrent)
                 .Select(x => x.TechnicianId).ToListAsync(cancellationToken);
-        await AddNotificationsAsync(context, recipients,
+        await AddNotificationsAsync(context, emailSender, logger, recipients,
             approves ? NotificationTypes.ReportApproved : NotificationTypes.ReportCorrectionRequested,
             approves ? "Informe aprobado" : "Corrección de informe solicitada",
             approves ? $"El informe del expediente {inspectionCase.Id} fue aprobado."
@@ -292,7 +300,7 @@ public static class EvaluationReportEndpoints
 
     private static async Task<IResult> GenerateOfficialAsync(
         int id, ClaimsPrincipal principal, EbrDbContext context, IEvidenceStorage storage,
-        IOfficialReportRenderer renderer, CancellationToken cancellationToken)
+        IOfficialReportRenderer renderer, IDocumentSigner documentSigner, CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var actingUserId))
             return Results.Unauthorized();
@@ -321,6 +329,11 @@ public static class EvaluationReportEndpoints
         await using (var content = new MemoryStream(bytes, writable: false))
             await storage.SaveAsync(storageKey, "application/pdf", content, cancellationToken);
 
+        // Firma electrónica (RF-19): se firma el binario exacto que se guardó, con la clave privada del
+        // sistema; la huella de la clave pública queda en el metadato para poder verificar después
+        // aunque la clave activa cambie con el tiempo.
+        var signature = documentSigner.Sign(bytes);
+
         var official = new EvaluationOfficialReport
         {
             ReportId = report.Id,
@@ -328,6 +341,9 @@ public static class EvaluationReportEndpoints
             SizeBytes = bytes.LongLength,
             Sha256 = hash,
             StorageKey = storageKey,
+            SignatureAlgorithm = documentSigner.Algorithm,
+            SignatureBase64 = Convert.ToBase64String(signature),
+            PublicKeyThumbprint = documentSigner.PublicKeyThumbprint,
             GeneratedBy = actingUserId
         };
         context.EvaluationOfficialReports.Add(official);
@@ -366,8 +382,52 @@ public static class EvaluationReportEndpoints
         return content is null ? Results.NotFound() : Results.File(content, item.MimeType, item.FileName);
     }
 
+    /// <summary>
+    /// Verifica el PDF oficial contra su firma electrónica (RF-19): recalcula el hash del binario tal
+    /// como está hoy en el almacenamiento y comprueba la firma con la clave pública del sistema. Ambas
+    /// comprobaciones son independientes —el hash detecta cualquier alteración del binario, la firma
+    /// además certifica que lo emitió el sistema con la clave vigente al momento de generarlo— y las
+    /// dos deben cumplirse para que el documento se considere válido.
+    /// </summary>
+    private static async Task<IResult> VerifyOfficialAsync(
+        int id, ClaimsPrincipal principal, EbrDbContext context, IEvidenceStorage storage,
+        IDocumentSigner documentSigner, CancellationToken cancellationToken)
+    {
+        var instance = await context.EvaluationInstances.AsNoTracking()
+            .SingleOrDefaultAsync(value => value.Id == id, cancellationToken);
+        if (instance is null) return Results.NotFound();
+        if (!await CanReadAsync(principal, instance.CaseId, context, cancellationToken)) return Results.Forbid();
+
+        var item = await (from official in context.EvaluationOfficialReports.AsNoTracking()
+                          join report in context.EvaluationReports.AsNoTracking() on official.ReportId equals report.Id
+                          where report.EvaluationInstanceId == id
+                          orderby report.Version descending
+                          select official).FirstOrDefaultAsync(cancellationToken);
+        if (item is null) return Results.NotFound();
+
+        var content = await storage.OpenAsync(item.StorageKey, cancellationToken);
+        if (content is null) return Results.NotFound();
+
+        byte[] bytes;
+        await using (content)
+        {
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, cancellationToken);
+            bytes = buffer.ToArray();
+        }
+
+        var hashMatches = string.Equals(
+            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(), item.Sha256, StringComparison.Ordinal);
+        var signatureValid = documentSigner.Verify(bytes, Convert.FromBase64String(item.SignatureBase64));
+
+        return Results.Ok(new SignatureVerificationResponse(
+            item.Id, id, hashMatches, signatureValid, hashMatches && signatureValid,
+            item.SignatureAlgorithm, item.PublicKeyThumbprint, item.GeneratedAt, item.GeneratedBy));
+    }
+
     private static async Task<IResult> CloseCaseAsync(
         int id, CloseCaseRequest request, ClaimsPrincipal principal, EbrDbContext context,
+        IEmailSender emailSender, ILogger<Program> logger,
         CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var actingUserId))
@@ -418,16 +478,18 @@ public static class EvaluationReportEndpoints
         var closure = await context.CaseClosures.AsNoTracking().SingleAsync(value => value.CaseId == id, cancellationToken);
         var recipients = await context.CompanyUsers.AsNoTracking().Where(x => x.CompanyId == inspectionCase.CompanyId)
             .Select(x => x.UserId).ToListAsync(cancellationToken);
-        await AddNotificationsAsync(context, recipients, NotificationTypes.CaseClosed,
+        await AddNotificationsAsync(context, emailSender, logger, recipients, NotificationTypes.CaseClosed,
             "Expediente cerrado", $"El expediente {id} fue cerrado oficialmente.", id,
             $"case-closure:{closure.Id}", cancellationToken);
         return Results.Ok(DescribeClosure(closure));
     }
 
     private static async Task AddNotificationsAsync(
-        EbrDbContext context, IEnumerable<Guid> recipients, string type, string title, string message,
-        int caseId, string operationPrefix, CancellationToken cancellationToken)
+        EbrDbContext context, IEmailSender emailSender, ILogger<Program> logger, IEnumerable<Guid> recipients,
+        string type, string title, string message, int caseId, string operationPrefix,
+        CancellationToken cancellationToken)
     {
+        var newRecipients = new List<Guid>();
         foreach (var recipient in recipients.Distinct())
         {
             var operationId = $"{operationPrefix}:{recipient}";
@@ -442,8 +504,16 @@ public static class EvaluationReportEndpoints
                 ReferenceId = caseId,
                 OperationId = operationId
             });
+            newRecipients.Add(recipient);
         }
         await context.SaveChangesAsync(cancellationToken);
+
+        // El correo es un complemento de la notificación in-app: solo se envía a quien recibió una
+        // notificación nueva, y un proveedor SMTP caído no puede bloquear la revisión ni el cierre.
+        foreach (var recipient in newRecipients)
+        {
+            await CaseEndpoints.SendNotificationEmailAsync(context, emailSender, logger, recipient, title, message, cancellationToken);
+        }
     }
 
     /// <summary>
@@ -480,6 +550,19 @@ public static class EvaluationReportEndpoints
             .Select(value => new OfficialReportEvidence(value.FileName, value.Hash, value.SizeBytes))
             .ToListAsync(cancellationToken);
 
+        // Firma visual del PDF (RF-19): el nombre de quien aprobó esta versión del informe, tomado de
+        // la revisión ya persistida. No se guarda nada nuevo — es el mismo dato que ya usa RF-17/RF-18,
+        // resuelto aquí solo para imprimirlo en el documento.
+        var approverId = await context.EvaluationReportReviews.AsNoTracking()
+            .Where(value => value.ReportId == report.Id && value.Decision == EvaluationReportDecisions.Approved)
+            .OrderByDescending(value => value.ReviewedAt)
+            .Select(value => (Guid?)value.ReviewedBy)
+            .FirstOrDefaultAsync(cancellationToken);
+        var approverName = approverId is null ? null : await context.Users.AsNoTracking()
+            .Where(user => user.Id == approverId)
+            .Select(user => user.FullName)
+            .FirstOrDefaultAsync(cancellationToken);
+
         return new OfficialReportContent(
             instanceId,
             inspectionCase.Id,
@@ -500,12 +583,13 @@ public static class EvaluationReportEndpoints
             nonConformities,
             evidences,
             report.CreatedAt,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            string.IsNullOrWhiteSpace(approverName) ? "Coordinador EBR" : approverName);
     }
 
     private static OfficialReportResponse DescribeOfficial(EvaluationOfficialReport value, int instanceId, int version) =>
         new(value.Id, instanceId, value.ReportId, version, value.FileName, value.MimeType, value.SizeBytes,
-            value.Sha256, value.GeneratedAt, value.GeneratedBy);
+            value.Sha256, value.SignatureAlgorithm, value.PublicKeyThumbprint, value.GeneratedAt, value.GeneratedBy);
 
     private static ClosureResponse DescribeClosure(CaseClosure value) => new(value.Id, value.CaseId, value.ReportId,
         value.OfficialReportId, value.Status, value.Result, value.ClosedAt, value.ClosedBy);
@@ -581,7 +665,11 @@ public static class EvaluationReportEndpoints
         Guid CreatedBy);
 
     private sealed record OfficialReportResponse(int Id, int EvaluationInstanceId, int ReportId, int ReportVersion,
-        string FileName, string MimeType, long SizeBytes, string Sha256, DateTimeOffset GeneratedAt, Guid GeneratedBy);
+        string FileName, string MimeType, long SizeBytes, string Sha256, string SignatureAlgorithm,
+        string PublicKeyThumbprint, DateTimeOffset GeneratedAt, Guid GeneratedBy);
     private sealed record ClosureResponse(int Id, int CaseId, int ReportId, int OfficialReportId, string Status,
         string Result, DateTimeOffset ClosedAt, Guid ClosedBy);
+    private sealed record SignatureVerificationResponse(
+        int OfficialReportId, int EvaluationInstanceId, bool HashMatches, bool SignatureValid, bool Valid,
+        string SignatureAlgorithm, string PublicKeyThumbprint, DateTimeOffset GeneratedAt, Guid GeneratedBy);
 }

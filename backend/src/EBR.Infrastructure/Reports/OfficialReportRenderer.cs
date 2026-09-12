@@ -1,7 +1,9 @@
 using System.Globalization;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using EBR.Application.Reports;
+using QuestPDF.Drawing;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -16,10 +18,21 @@ namespace EBR.Infrastructure.Reports;
 /// </summary>
 public sealed class OfficialReportRenderer : IOfficialReportRenderer
 {
+    /// <summary>
+    /// Nombre de familia con el que "Alex Brush" queda registrada ante QuestPDF/SkiaSharp; es el mismo
+    /// nombre declarado dentro del propio archivo TTF (SIL OFL 1.1, ver Reports/Assets/AlexBrush-OFL.txt).
+    /// </summary>
+    private const string SignatureFontFamily = "Alex Brush";
+
     static OfficialReportRenderer()
     {
         QuestPDF.Settings.License = LicenseType.Community;
         QuestPDF.Settings.EnableDebugging = false;
+
+        using var fontStream = Assembly.GetExecutingAssembly()
+            .GetManifestResourceStream("EBR.Infrastructure.Reports.Assets.AlexBrush-Regular.ttf")
+            ?? throw new InvalidOperationException("No se encontró la fuente embebida de la firma visual (AlexBrush-Regular.ttf).");
+        FontManager.RegisterFont(fontStream);
     }
 
     private static readonly IReadOnlyDictionary<string, string> SeverityLabels = new Dictionary<string, string>
@@ -111,6 +124,8 @@ public sealed class OfficialReportRenderer : IOfficialReportRenderer
                                 evidence.Item().Text($"  {item.FileName}  ·  {item.SizeBytes} bytes  ·  SHA-256 {item.Sha256}");
                         }
                     });
+
+                    SignatureBlock(body, content.ApproverFullName);
                 });
 
                 page.Footer().Text(text =>
@@ -142,6 +157,26 @@ public sealed class OfficialReportRenderer : IOfficialReportRenderer
         });
 
         return new RenderedOfficialReport(document.GeneratePdf(), contentHash);
+    }
+
+    /// <summary>
+    /// Firma visual del coordinador que aprobó esta versión del informe (RF-19), al estilo de un
+    /// documento firmado electrónicamente (p. ej. Adobe Sign): el nombre se imprime en una fuente
+    /// cursiva a modo de rúbrica, con el nombre en letra normal debajo a manera de aclaración. No es una
+    /// firma digital criptográfica —esa ya vive en el metadato del PDF, ver <c>IDocumentSigner</c>—, es
+    /// solo la representación visual esperada en un documento oficial.
+    /// </summary>
+    private static void SignatureBlock(ColumnDescriptor column, string approverFullName)
+    {
+        column.Item().PaddingTop(24).MaxWidth(260).Column(signature =>
+        {
+            signature.Item().Text("Firma electrónica").Bold().FontSize(11).FontColor(Colors.Grey.Darken1);
+            signature.Item().PaddingTop(8).PaddingLeft(6).Text(approverFullName)
+                .FontFamily(SignatureFontFamily).FontSize(30).FontColor(Colors.Black);
+            signature.Item().PaddingTop(2).LineHorizontal(0.75f).LineColor(Colors.Grey.Darken2);
+            signature.Item().PaddingTop(4).Text(approverFullName).FontSize(9).SemiBold();
+            signature.Item().Text("Coordinador · Evaluación Basada en Riesgo").FontSize(8).FontColor(Colors.Grey.Darken1);
+        });
     }
 
     private static void Section(ColumnDescriptor column, string title, string text)
@@ -184,6 +219,7 @@ public sealed class OfficialReportRenderer : IOfficialReportRenderer
         builder.Append(content.MajorCount).Append('\n');
         builder.Append(content.MinorCount).Append('\n');
         builder.Append(content.ReportIssuedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)).Append('\n');
+        builder.Append(content.ApproverFullName).Append('\n');
         foreach (var item in content.NonConformities
                      .OrderBy(value => value.Severity, StringComparer.Ordinal)
                      .ThenBy(value => value.CriterionCode, StringComparer.Ordinal)

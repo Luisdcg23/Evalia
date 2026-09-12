@@ -104,6 +104,7 @@ if (authenticationConfigured)
     app.MapEvaluationEvidenceEndpoints();
     app.MapEvaluationReportEndpoints();
     app.MapOperationalReadEndpoints();
+    app.MapSigningEndpoints();
 }
 
 if (app.Environment.IsEnvironment("Testing") ||

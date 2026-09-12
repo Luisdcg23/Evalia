@@ -393,6 +393,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         Assert.Equal(scenario.InstanceId, official.EvaluationInstanceId);
         Assert.Equal(64, official.Sha256.Length);
         Assert.True(official.SizeBytes > 100);
+        Assert.Equal("RSA-SHA256", official.SignatureAlgorithm);
+        Assert.Equal(64, official.PublicKeyThumbprint.Length);
 
         using var download = await SendAsync(HttpMethod.Get,
             $"/api/evaluations/{scenario.InstanceId}/report/official/content", null, scenario.CoordinatorToken);
@@ -402,6 +404,53 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         Assert.StartsWith("%PDF-", System.Text.Encoding.ASCII.GetString(bytes));
         Assert.Equal(official.Sha256, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
         Assert.Equal(official.SizeBytes, bytes.LongLength);
+    }
+
+    [Fact]
+    public async Task TheOfficialPdfSignatureVerifiesAsValid()
+    {
+        var scenario = await SubmitEvaluationAsync(1);
+        await IssueReportAsync(scenario, "verificacion");
+        await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "Informe aprobado para verificación de firma."
+        }, scenario.CoordinatorToken);
+        var official = await PostJsonAsync<OfficialReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
+
+        var verification = await GetJsonAsync<SignatureVerificationResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report/official/verify", scenario.CoordinatorToken);
+
+        Assert.Equal(official.Id, verification.OfficialReportId);
+        Assert.True(verification.HashMatches);
+        Assert.True(verification.SignatureValid);
+        Assert.True(verification.Valid);
+        Assert.Equal(official.SignatureAlgorithm, verification.SignatureAlgorithm);
+        Assert.Equal(official.PublicKeyThumbprint, verification.PublicKeyThumbprint);
+    }
+
+    [Fact]
+    public async Task VerifyingTheOfficialPdfRequiresAccessToTheCase()
+    {
+        var scenario = await SubmitEvaluationAsync(1);
+        await IssueReportAsync(scenario, "verificacion restringida");
+        await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "Informe aprobado."
+        }, scenario.CoordinatorToken);
+        await PostJsonAsync<OfficialReportResponse>(
+            $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
+
+        var otherEmail = $"tecnico-verificacion-{Guid.NewGuid():N}@ebr.local";
+        await CreateEvaluatorUserAsync(otherEmail);
+        var otherToken = await LoginAsync(otherEmail);
+
+        using var response = await SendAsync(HttpMethod.Get,
+            $"/api/evaluations/{scenario.InstanceId}/report/official/verify", null, otherToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
     [Fact]
@@ -776,7 +825,12 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
 
     private sealed record OfficialReportResponse(
         int Id, int EvaluationInstanceId, int ReportId, int ReportVersion, string FileName,
-        string MimeType, long SizeBytes, string Sha256, DateTimeOffset GeneratedAt, Guid GeneratedBy);
+        string MimeType, long SizeBytes, string Sha256, string SignatureAlgorithm, string PublicKeyThumbprint,
+        DateTimeOffset GeneratedAt, Guid GeneratedBy);
+
+    private sealed record SignatureVerificationResponse(
+        int OfficialReportId, int EvaluationInstanceId, bool HashMatches, bool SignatureValid, bool Valid,
+        string SignatureAlgorithm, string PublicKeyThumbprint, DateTimeOffset GeneratedAt, Guid GeneratedBy);
 
     private sealed record ClosureResponse(
         int Id, int CaseId, int ReportId, int OfficialReportId, string Status, string Result,

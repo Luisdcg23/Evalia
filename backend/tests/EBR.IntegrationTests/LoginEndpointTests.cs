@@ -1,15 +1,19 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using EBR.Application.Email;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace EBR.IntegrationTests;
 
 public sealed class LoginEndpointTests : IClassFixture<EbrApiFactory>
 {
+    private readonly EbrApiFactory _factory;
     private readonly HttpClient _client;
 
     public LoginEndpointTests(EbrApiFactory factory)
     {
+        _factory = factory;
         _client = factory.CreateClient();
     }
 
@@ -144,6 +148,70 @@ public sealed class LoginEndpointTests : IClassFixture<EbrApiFactory>
     }
 
     [Fact]
+    public async Task ApprovingARegistrationEmailsTheApplicant()
+    {
+        var email = $"aprobado-{Guid.NewGuid():N}@example.local";
+        await RegisterAsync(email, "Registro2026!");
+        var administrator = await LoginAsync("admin@ebr.local");
+        var user = await FindPendingUserAsync(administrator, email);
+
+        using var approvalRequest = new HttpRequestMessage(HttpMethod.Post, $"/api/users/{user.Id}/approve");
+        approvalRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", administrator.AccessToken);
+        using var approvalResponse = await _client.SendAsync(approvalRequest);
+        approvalResponse.EnsureSuccessStatusCode();
+
+        var sender = (RecordingEmailSender)_factory.Services.GetRequiredService<IEmailSender>();
+        var sent = Assert.Single(sender.SentEmails, item => item.ToEmail == email);
+        Assert.Contains("aprobado", sent.Subject, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(sent.HtmlBody);
+        Assert.Contains($"cid:{EmailTemplates.LogoContentId}", sent.HtmlBody);
+    }
+
+    [Fact]
+    public async Task RejectingARegistrationEmailsTheApplicantWithTheReason()
+    {
+        var email = $"rechazado-{Guid.NewGuid():N}@example.local";
+        await RegisterAsync(email, "Registro2026!");
+        var administrator = await LoginAsync("admin@ebr.local");
+        var user = await FindPendingUserAsync(administrator, email);
+
+        using var rejectionRequest = new HttpRequestMessage(HttpMethod.Post, $"/api/users/{user.Id}/reject")
+        {
+            Content = JsonContent.Create(new { reason = "La carta de autorización no corresponde a la empresa declarada." })
+        };
+        rejectionRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", administrator.AccessToken);
+        using var rejectionResponse = await _client.SendAsync(rejectionRequest);
+        rejectionResponse.EnsureSuccessStatusCode();
+
+        var sender = (RecordingEmailSender)_factory.Services.GetRequiredService<IEmailSender>();
+        var sent = Assert.Single(sender.SentEmails, item => item.ToEmail == email);
+        Assert.Contains("no aprobado", sent.Subject, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("La carta de autorización no corresponde a la empresa declarada.", sent.PlainTextBody);
+        // El HTML escapa "ó" a &#243; (correcto: se renderiza igual, pero ya no es un match literal).
+        Assert.Contains("no corresponde a la empresa declarada.", sent.HtmlBody);
+    }
+
+    [Fact]
+    public async Task RejectingARegistrationWithoutAReasonStillEmailsTheApplicant()
+    {
+        var email = $"rechazado-sin-motivo-{Guid.NewGuid():N}@example.local";
+        await RegisterAsync(email, "Registro2026!");
+        var administrator = await LoginAsync("admin@ebr.local");
+        var user = await FindPendingUserAsync(administrator, email);
+
+        using var rejectionRequest = new HttpRequestMessage(HttpMethod.Post, $"/api/users/{user.Id}/reject")
+        {
+            Content = JsonContent.Create(new { })
+        };
+        rejectionRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", administrator.AccessToken);
+        using var rejectionResponse = await _client.SendAsync(rejectionRequest);
+        rejectionResponse.EnsureSuccessStatusCode();
+
+        var sender = (RecordingEmailSender)_factory.Services.GetRequiredService<IEmailSender>();
+        Assert.Single(sender.SentEmails, item => item.ToEmail == email);
+    }
+
+    [Fact]
     public async Task CurrentUserReturnsAuthenticatedIdentityAndRole()
     {
         var coordinator = await LoginAsync("coordinador@ebr.local");
@@ -248,6 +316,18 @@ public sealed class LoginEndpointTests : IClassFixture<EbrApiFactory>
 
     private async Task RegisterAndApproveAsync(string email, string password)
     {
+        await RegisterAsync(email, password);
+        var administrator = await LoginAsync("admin@ebr.local");
+        var user = await FindPendingUserAsync(administrator, email);
+
+        using var approvalRequest = new HttpRequestMessage(HttpMethod.Post, $"/api/users/{user.Id}/approve");
+        approvalRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", administrator.AccessToken);
+        using var approvalResponse = await _client.SendAsync(approvalRequest);
+        approvalResponse.EnsureSuccessStatusCode();
+    }
+
+    private async Task RegisterAsync(string email, string password)
+    {
         using var registrationResponse = await _client.PostAsJsonAsync("/api/auth/register", new
         {
             fullName = "Usuario Aislado",
@@ -263,19 +343,16 @@ public sealed class LoginEndpointTests : IClassFixture<EbrApiFactory>
             authorizationLetterStorageReference = "pendientes/carta-autorizacion.pdf"
         });
         registrationResponse.EnsureSuccessStatusCode();
+    }
 
-        var administrator = await LoginAsync("admin@ebr.local");
+    private async Task<PendingUserResponse> FindPendingUserAsync(LoginResponse administrator, string email)
+    {
         using var pendingRequest = new HttpRequestMessage(HttpMethod.Get, "/api/users/pending");
         pendingRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", administrator.AccessToken);
         using var pendingResponse = await _client.SendAsync(pendingRequest);
         pendingResponse.EnsureSuccessStatusCode();
         var pending = await pendingResponse.Content.ReadFromJsonAsync<List<PendingUserResponse>>();
-        var user = Assert.Single(pending!, item => item.Email == email);
-
-        using var approvalRequest = new HttpRequestMessage(HttpMethod.Post, $"/api/users/{user.Id}/approve");
-        approvalRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", administrator.AccessToken);
-        using var approvalResponse = await _client.SendAsync(approvalRequest);
-        approvalResponse.EnsureSuccessStatusCode();
+        return Assert.Single(pending!, item => item.Email == email);
     }
 
     private sealed record LoginResponse(string AccessToken, string RefreshToken, string Role);
