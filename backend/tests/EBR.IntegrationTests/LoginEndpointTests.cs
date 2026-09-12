@@ -163,6 +163,8 @@ public sealed class LoginEndpointTests : IClassFixture<EbrApiFactory>
         var sender = (RecordingEmailSender)_factory.Services.GetRequiredService<IEmailSender>();
         var sent = Assert.Single(sender.SentEmails, item => item.ToEmail == email);
         Assert.Contains("aprobado", sent.Subject, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(sent.HtmlBody);
+        Assert.Contains($"cid:{EmailTemplates.LogoContentId}", sent.HtmlBody);
     }
 
     [Fact]
@@ -184,7 +186,9 @@ public sealed class LoginEndpointTests : IClassFixture<EbrApiFactory>
         var sender = (RecordingEmailSender)_factory.Services.GetRequiredService<IEmailSender>();
         var sent = Assert.Single(sender.SentEmails, item => item.ToEmail == email);
         Assert.Contains("no aprobado", sent.Subject, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("La carta de autorización no corresponde a la empresa declarada.", sent.Body);
+        Assert.Contains("La carta de autorización no corresponde a la empresa declarada.", sent.PlainTextBody);
+        // El HTML escapa "ó" a &#243; (correcto: se renderiza igual, pero ya no es un match literal).
+        Assert.Contains("no corresponde a la empresa declarada.", sent.HtmlBody);
     }
 
     [Fact]

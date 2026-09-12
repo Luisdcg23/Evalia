@@ -1,3 +1,4 @@
+using System.Reflection;
 using EBR.Application.Email;
 using MailKit.Net.Smtp;
 using MailKit.Security;
@@ -14,6 +15,8 @@ namespace EBR.Infrastructure.Email;
 /// </summary>
 public sealed class SmtpEmailSender : IEmailSender
 {
+    private const string LogoResourceName = "EBR.Infrastructure.Email.Assets.evalia-logo.png";
+
     private readonly string _host;
     private readonly int _port;
     private readonly string _user;
@@ -37,18 +40,40 @@ public sealed class SmtpEmailSender : IEmailSender
         _fromName = settings.FromName;
     }
 
-    public async Task SendAsync(string toEmail, string subject, string body, CancellationToken cancellationToken)
+    public async Task SendAsync(string toEmail, string subject, string plainTextBody, string? htmlBody, CancellationToken cancellationToken)
     {
         var message = new MimeMessage();
         message.From.Add(new MailboxAddress(_fromName, _fromAddress));
         message.To.Add(MailboxAddress.Parse(toEmail));
         message.Subject = subject;
-        message.Body = new TextPart("plain") { Text = body };
+        message.Body = BuildBody(plainTextBody, htmlBody);
 
         using var client = new SmtpClient();
         await client.ConnectAsync(_host, _port, SecureSocketOptions.StartTls, cancellationToken);
         await client.AuthenticateAsync(_user, _password, cancellationToken);
         await client.SendAsync(message, cancellationToken);
         await client.DisconnectAsync(true, cancellationToken);
+    }
+
+    /// <summary>
+    /// Sin HTML, el mensaje es texto plano puro. Con HTML, se arma como <c>multipart/alternative</c> —el
+    /// cliente de correo elige la mejor versión que soporte— y, si la plantilla referencia el logo por
+    /// <see cref="EmailTemplates.LogoContentId"/>, se adjunta embebido para que se vea sin depender de
+    /// que el destinatario cargue imágenes externas.
+    /// </summary>
+    private static MimeEntity BuildBody(string plainTextBody, string? htmlBody)
+    {
+        if (htmlBody is null) return new TextPart("plain") { Text = plainTextBody };
+
+        var builder = new BodyBuilder { TextBody = plainTextBody, HtmlBody = htmlBody };
+        if (htmlBody.Contains($"cid:{EmailTemplates.LogoContentId}", StringComparison.Ordinal))
+        {
+            using var logoStream = Assembly.GetExecutingAssembly().GetManifestResourceStream(LogoResourceName)
+                ?? throw new InvalidOperationException($"No se encontró el recurso embebido '{LogoResourceName}'.");
+            var logo = builder.LinkedResources.Add("evalia-logo.png", logoStream);
+            logo.ContentId = EmailTemplates.LogoContentId;
+        }
+
+        return builder.ToMessageBody();
     }
 }

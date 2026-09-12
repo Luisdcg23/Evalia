@@ -6,6 +6,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Logo de Evalia para el encabezado de los correos HTML (SmtpEmailSender lo embebe por Content-Id). -->
+    <EmbeddedResource Include="Email\Assets\evalia-logo.png" />
+    <!-- Fuente cursiva (SIL OFL 1.1, ver Reports\Assets\AlexBrush-OFL.txt) para la firma visual del PDF oficial. -->
+    <EmbeddedResource Include="Reports\Assets\AlexBrush-Regular.ttf" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="MailKit" Version="4.17.0" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="9.0.14" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.14" />

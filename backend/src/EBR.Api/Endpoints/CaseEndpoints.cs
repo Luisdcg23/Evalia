@@ -640,7 +640,8 @@ public static partial class CaseEndpoints
 
         try
         {
-            await emailSender.SendAsync(recipientEmail, title, message, cancellationToken);
+            var content = EmailTemplates.CaseNotification(title, message);
+            await emailSender.SendAsync(recipientEmail, content.Subject, content.PlainText, content.Html, cancellationToken);
         }
         catch (Exception ex)
         {

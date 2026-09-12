@@ -10,7 +10,7 @@ namespace EBR.Infrastructure.Email;
 /// </summary>
 public sealed partial class NullEmailSender(ILogger<NullEmailSender> logger) : IEmailSender
 {
-    public Task SendAsync(string toEmail, string subject, string body, CancellationToken cancellationToken)
+    public Task SendAsync(string toEmail, string subject, string plainTextBody, string? htmlBody, CancellationToken cancellationToken)
     {
         LogEmailSkipped(logger, toEmail, subject);
         return Task.CompletedTask;

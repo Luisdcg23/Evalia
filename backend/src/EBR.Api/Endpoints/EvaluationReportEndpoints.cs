@@ -550,6 +550,19 @@ public static class EvaluationReportEndpoints
             .Select(value => new OfficialReportEvidence(value.FileName, value.Hash, value.SizeBytes))
             .ToListAsync(cancellationToken);
 
+        // Firma visual del PDF (RF-19): el nombre de quien aprobó esta versión del informe, tomado de
+        // la revisión ya persistida. No se guarda nada nuevo — es el mismo dato que ya usa RF-17/RF-18,
+        // resuelto aquí solo para imprimirlo en el documento.
+        var approverId = await context.EvaluationReportReviews.AsNoTracking()
+            .Where(value => value.ReportId == report.Id && value.Decision == EvaluationReportDecisions.Approved)
+            .OrderByDescending(value => value.ReviewedAt)
+            .Select(value => (Guid?)value.ReviewedBy)
+            .FirstOrDefaultAsync(cancellationToken);
+        var approverName = approverId is null ? null : await context.Users.AsNoTracking()
+            .Where(user => user.Id == approverId)
+            .Select(user => user.FullName)
+            .FirstOrDefaultAsync(cancellationToken);
+
         return new OfficialReportContent(
             instanceId,
             inspectionCase.Id,
@@ -570,7 +583,8 @@ public static class EvaluationReportEndpoints
             nonConformities,
             evidences,
             report.CreatedAt,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            string.IsNullOrWhiteSpace(approverName) ? "Coordinador EBR" : approverName);
     }
 
     private static OfficialReportResponse DescribeOfficial(EvaluationOfficialReport value, int instanceId, int version) =>

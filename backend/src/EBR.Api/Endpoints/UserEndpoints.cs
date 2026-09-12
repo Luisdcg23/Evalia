@@ -110,6 +110,7 @@ public static partial class UserEndpoints
         Guid id,
         UserManager<ApplicationUser> userManager,
         IEmailSender emailSender,
+        IConfiguration configuration,
         ILogger<Program> logger,
         CancellationToken cancellationToken)
     {
@@ -142,11 +143,8 @@ public static partial class UserEndpoints
             return Results.Problem("No fue posible aprobar el usuario.");
         }
 
-        await SendDecisionEmailAsync(
-            emailSender, logger, user.Email,
-            "Registro aprobado — Evalia",
-            $"Hola {user.FullName}, tu registro en Evalia fue aprobado. Ya puedes iniciar sesión con tu correo y contraseña.",
-            cancellationToken);
+        var content = EmailTemplates.RegistrationApproved(user.FullName, configuration["Frontend:Origin"]);
+        await SendDecisionEmailAsync(emailSender, logger, user.Email, content, cancellationToken);
         return Results.NoContent();
     }
 
@@ -178,26 +176,21 @@ public static partial class UserEndpoints
             return Results.Problem("No fue posible rechazar el usuario.");
         }
 
-        await SendDecisionEmailAsync(
-            emailSender, logger, user.Email,
-            "Registro no aprobado — Evalia",
-            string.IsNullOrWhiteSpace(reason)
-                ? $"Hola {user.FullName}, tu registro en Evalia no fue aprobado."
-                : $"Hola {user.FullName}, tu registro en Evalia no fue aprobado. Motivo: {reason}",
-            cancellationToken);
+        var content = EmailTemplates.RegistrationRejected(user.FullName, reason);
+        await SendDecisionEmailAsync(emailSender, logger, user.Email, content, cancellationToken);
         return Results.NoContent();
     }
 
     // El correo es un complemento del aviso de aprobación/rechazo, nunca un requisito: un proveedor
     // SMTP caído no puede bloquear la decisión del administrador sobre un registro pendiente.
     private static async Task SendDecisionEmailAsync(
-        IEmailSender emailSender, ILogger<Program> logger, string? toEmail, string subject, string body,
+        IEmailSender emailSender, ILogger<Program> logger, string? toEmail, EmailTemplates.EmailContent content,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(toEmail)) return;
         try
         {
-            await emailSender.SendAsync(toEmail, subject, body, cancellationToken);
+            await emailSender.SendAsync(toEmail, content.Subject, content.PlainText, content.Html, cancellationToken);
         }
         catch (Exception ex)
         {

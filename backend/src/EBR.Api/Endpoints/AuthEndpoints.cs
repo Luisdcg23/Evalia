@@ -185,12 +185,8 @@ public static partial class AuthEndpoints
             // código igual se devuelve en el cuerpo de la respuesta para poder probar sin bandeja real.
             try
             {
-                await emailSender.SendAsync(
-                    email,
-                    "Recuperación de contraseña — Evalia",
-                    $"Tu código de recuperación es {recoveryCode}. Vence en 10 minutos. " +
-                    "Si no solicitaste este cambio, ignora este mensaje.",
-                    cancellationToken);
+                var content = EmailTemplates.PasswordRecovery(recoveryCode);
+                await emailSender.SendAsync(email, content.Subject, content.PlainText, content.Html, cancellationToken);
             }
             catch (Exception ex)
             {

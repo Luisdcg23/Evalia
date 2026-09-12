@@ -34,7 +34,8 @@ public sealed record OfficialReportContent(
     IReadOnlyList<OfficialReportNonConformity> NonConformities,
     IReadOnlyList<OfficialReportEvidence> Evidences,
     DateTimeOffset ReportIssuedAt,
-    DateTimeOffset GeneratedAt);
+    DateTimeOffset GeneratedAt,
+    string ApproverFullName);
 
 /// <summary>PDF renderizado y el hash SHA-256 de su contenido lógico, estable entre generaciones.</summary>
 public sealed record RenderedOfficialReport(byte[] Content, string ContentSha256);
