@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { listAlerts, type HealthAlert } from "./features/alerts/api";
 import { listComplaints, type Complaint } from "./features/complaints/api";
 import { listCompanies, type Company } from "./features/companies/api";
+import ReportViewer from "./features/reports/ReportViewer";
+import type { SignedReport } from "./features/reports/report-pdf";
 
 /* ── Backend → UI mappers (Alertas / Denuncias) ───────────────────────
    El backend guarda el resultado de la decisión y el estado de trámite
@@ -750,7 +752,7 @@ function ConfirmacionSection({ caso, tecnico, onGoAsignaciones, onGoInicio }: {
 /* ─────────────────────────────────────────────────────────────────────
    Section: Reportes
 ───────────────────────────────────────────────────────────────────── */
-function ReportesSection({ onToast }:{ onToast:(m:string)=>void }) {
+function ReportesSection({ onToast, onOpenReport }:{ onToast:(m:string)=>void; onOpenReport:(r:SignedReport)=>void }) {
   const statusStyle: Record<string,{color:string;bg:string;border:string}> = {
     "En Revisión":{ color:"#8b5cf6", bg:"rgba(139,92,246,0.1)", border:"rgba(139,92,246,0.35)" },
     "Aprobado":   { color:"#22c55e", bg:"rgba(34,197,94,0.1)",  border:"rgba(34,197,94,0.35)"  },
@@ -771,7 +773,7 @@ function ReportesSection({ onToast }:{ onToast:(m:string)=>void }) {
               <span style={{ fontSize:"0.6rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif" }}>{rep.fecha}</span>
               <div style={{ display:"flex", gap:7 }}>
                 {rep.estado==="En Revisión" && <><button onClick={()=>onToast("Informe aprobado · "+rep.id)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(34,197,94,0.1)", borderTop:"1px solid rgba(34,197,94,0.35)", borderRight:"1px solid rgba(34,197,94,0.35)", borderBottom:"1px solid rgba(34,197,94,0.35)", borderLeft:"1px solid rgba(34,197,94,0.35)", color:"#22c55e", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Aprobar</button><button onClick={()=>onToast("Informe devuelto · "+rep.id)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(229,59,246,0.08)", borderTop:"1px solid rgba(229,59,246,0.3)", borderRight:"1px solid rgba(229,59,246,0.3)", borderBottom:"1px solid rgba(229,59,246,0.3)", borderLeft:"1px solid rgba(229,59,246,0.3)", color:"#E53BF6", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Devolver</button></>}
-                {rep.estado==="Aprobado" && <button onClick={()=>onToast("PDF descargado · "+rep.id)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.3)", borderRight:"1px solid rgba(34,197,94,0.3)", borderBottom:"1px solid rgba(34,197,94,0.3)", borderLeft:"1px solid rgba(34,197,94,0.3)", color:"#22c55e", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Descargar PDF</button>}
+                {rep.estado==="Aprobado" && <button onClick={()=>onOpenReport({ report:{ id:rep.id, empresa:rep.empresa, tipo:rep.tipo, riesgo:rep.riesgo, fecha:rep.fecha, tecnico:rep.tecnico }, signature:{ signerName:rep.tecnico, signedAt:rep.fecha } })} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.3)", borderRight:"1px solid rgba(34,197,94,0.3)", borderBottom:"1px solid rgba(34,197,94,0.3)", borderLeft:"1px solid rgba(34,197,94,0.3)", color:"#22c55e", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Descargar PDF</button>}
                 {rep.estado==="Devuelto" && <button onClick={()=>onToast("Corrección solicitada · "+rep.id)} style={{ padding:"5px 12px", borderRadius:9, cursor:"pointer", background:"rgba(229,59,246,0.08)", borderTop:"1px solid rgba(229,59,246,0.3)", borderRight:"1px solid rgba(229,59,246,0.3)", borderBottom:"1px solid rgba(229,59,246,0.3)", borderLeft:"1px solid rgba(229,59,246,0.3)", color:"#E53BF6", fontSize:"0.62rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Solicitar corrección</button>}
               </div>
             </div>
@@ -841,6 +843,8 @@ export default function CoordinatorDashboard({
   const [confirmedTech, setConfirmedTech]= useState<Tecnico|null>(null);
   const [drawerOpen,    setDrawer]       = useState(false);
   const [toast,         setToast]        = useState<string|null>(null);
+  /* Informe ya firmado por el técnico: el coordinador solo lo descarga o imprime. */
+  const [signedReport,  setSignedReport]  = useState<SignedReport|null>(null);
   const [alertas,       setAlertas]      = useState<AlertaItem[]>([]);
   const [denuncias,     setDenuncias]    = useState<DenunciaItem[]>([]);
 
@@ -975,7 +979,7 @@ export default function CoordinatorDashboard({
             {section==="asignaciones"  && <AsignacionesSection casos={casos} onOpenCaso={openCaso}/>}
             {section==="asignar-caso"  && selectedCaso && <AsignarCasoSection caso={selectedCaso} onConfirm={handleConfirmAssignment} onBack={()=>navigate("asignaciones")}/>}
             {section==="confirmacion"  && selectedCaso && confirmedTech && <ConfirmacionSection caso={selectedCaso} tecnico={confirmedTech} onGoAsignaciones={()=>navigate("asignaciones")} onGoInicio={()=>navigate("inicio")}/>}
-            {section==="reportes"      && <ReportesSection onToast={showToast}/>}
+            {section==="reportes"      && <ReportesSection onToast={showToast} onOpenReport={setSignedReport}/>}
             {section==="configuracion" && <ConfiguracionSection userName={userName} onToast={showToast}/>}
           </div>
         </main>
@@ -1006,6 +1010,8 @@ export default function CoordinatorDashboard({
             })}
           </div>
         )}
+
+        {signedReport && <ReportViewer report={signedReport.report} signature={signedReport.signature} canSign={false} onClose={()=>setSignedReport(null)} onToast={showToast}/>}
 
         {toast && <div style={{ position:"fixed", bottom:isMobile?74:24, left:"50%", transform:"translateX(-50%)", zIndex:90, display:"flex", alignItems:"center", gap:10, padding:"11px 18px", borderRadius:13, whiteSpace:"nowrap", background:"rgba(8,14,28,0.97)", backdropFilter:"blur(24px)", borderTop:"1px solid rgba(59,246,229,0.4)", borderRight:"1px solid rgba(59,246,229,0.4)", borderBottom:"1px solid rgba(59,246,229,0.4)", borderLeft:"1px solid rgba(59,246,229,0.4)", boxShadow:"0 16px 48px rgba(0,0,0,0.6), 0 0 24px rgba(59,246,229,0.15)", animation:"cdToast 0.3s cubic-bezier(.22,1,.36,1) both" }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="#3BF6E5" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>

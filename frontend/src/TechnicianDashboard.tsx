@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import ReportViewer from "./features/reports/ReportViewer";
+import type { ReportData, ReportSignature } from "./features/reports/report-pdf";
 
 function useWidth() {
   const [w, setW] = useState(() => window.innerWidth);
@@ -52,6 +54,23 @@ const INFORMES: ReportItem[] = [
   { id:"INF-0850", empresa:"Industria Montoya S.A.",      fechaLabel:"Hace 8 días", tipo:"Revisión Normativa", overdue:true,  daysAgo:8, riesgo:"Moderado" },
   { id:"INF-0880", empresa:"Panadería Artesanal Cruz",    fechaLabel:"Hoy",          tipo:"Evaluación Higiénica",overdue:false,daysAgo:0, riesgo:"Moderado" },
 ];
+
+/* El técnico responsable del informe es siempre el usuario con sesión activa. */
+interface Signer { name:string; email?:string }
+type OpenReport = (report:ReportData) => void;
+interface ReportsCtx { signer:Signer; signatures:Record<string,ReportSignature>; open:OpenReport }
+const reportIdForEvaluation = (ev:Evaluation) => ev.id.replace(/^EVA-/, "INF-");
+
+const reportFromItem = (rep:ReportItem, signer:Signer): ReportData => ({
+  id:rep.id, empresa:rep.empresa, tipo:rep.tipo, riesgo:rep.riesgo, fecha:rep.fechaLabel,
+  tecnico:signer.name, tecnicoEmail:signer.email,
+});
+/* Una evaluación EVA-#### completada genera el informe INF-#### con el mismo número. */
+const reportFromEvaluation = (ev:Evaluation, signer:Signer): ReportData => ({
+  id:reportIdForEvaluation(ev), empresa:ev.empresa, tipo:ev.tipo, riesgo:ev.riesgo,
+  fecha:`Hoy · ${ev.hora} – ${ev.horaFin}`, municipio:ev.municipio, direccion:ev.direccion,
+  contacto:`${ev.contacto} · ${ev.telefono}`, tecnico:signer.name, tecnicoEmail:signer.email,
+});
 
 /* Calendar: September 2026 (Sep 1 = Tuesday → offset 1) */
 const CAL_EVENTS: Record<number, { label:string; color:string }[]> = {
@@ -111,7 +130,7 @@ const WEEK_DAYS = [
 ];
 
 /* ── Evaluation card (interactive) ─────────────────────── */
-function EvalCard({ ev, onToast }: { ev:Evaluation; onToast:(m:string)=>void }) {
+function EvalCard({ ev, signer, signed, onOpenReport, onToast }: { ev:Evaluation; signer:Signer; signed:boolean; onOpenReport:OpenReport; onToast:(m:string)=>void }) {
   const [status, setStatus] = useState<EvalStatus>(ev.status);
   const [sheetOpen, setSheetOpen] = useState(false);
   const rk = RISK[ev.riesgo];
@@ -171,10 +190,10 @@ function EvalCard({ ev, onToast }: { ev:Evaluation; onToast:(m:string)=>void }) 
             </button>
           )}
           {status === "Completado" && (
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:7, padding:"10px", borderRadius:11, background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.25)", borderRight:"1px solid rgba(34,197,94,0.25)", borderBottom:"1px solid rgba(34,197,94,0.25)", borderLeft:"1px solid rgba(34,197,94,0.25)" }}>
+            <button onClick={()=>onOpenReport(reportFromEvaluation(ev, signer))} style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"center", gap:7, padding:"10px", borderRadius:11, cursor:"pointer", background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.25)", borderRight:"1px solid rgba(34,197,94,0.25)", borderBottom:"1px solid rgba(34,197,94,0.25)", borderLeft:"1px solid rgba(34,197,94,0.25)" }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              <span style={{ fontSize:"0.75rem", fontWeight:700, color:"#22c55e", fontFamily:"Poppins, sans-serif" }}>Completada · Generar informe</span>
-            </div>
+              <span style={{ fontSize:"0.75rem", fontWeight:700, color:"#22c55e", fontFamily:"Poppins, sans-serif" }}>{signed ? "Completada · Informe firmado" : "Completada · Generar informe"}</span>
+            </button>
           )}
         </div>
       </GlassCard>
@@ -183,21 +202,32 @@ function EvalCard({ ev, onToast }: { ev:Evaluation; onToast:(m:string)=>void }) 
 }
 
 /* ── Report card (interactive) ──────────────────────────── */
-function ReportCard({ rep, onToast }: { rep:ReportItem; onToast:(m:string)=>void }) {
-  const [state, setState] = useState<ReportState>("idle");
+function ReportCard({ rep, signer, signed, onOpenReport, onToast }: { rep:ReportItem; signer:Signer; signed:boolean; onOpenReport:OpenReport; onToast:(m:string)=>void }) {
+  const [state, setState] = useState<ReportState>(signed ? "done" : "idle");
   const [progress, setProgress] = useState(0);
   const rk = RISK[rep.riesgo];
+  const openReport = () => onOpenReport(reportFromItem(rep, signer));
 
   const handleGenerate = () => {
     setState("gen");
     let p = 0;
-    const iv = setInterval(()=>{ p += 7 + Math.random()*8; if(p >= 100){ clearInterval(iv); setProgress(100); setTimeout(()=>{ setState("done"); onToast("Informe generado · "+rep.id); },300); } else setProgress(p); },140);
+    const iv = setInterval(()=>{ p += 7 + Math.random()*8; if(p >= 100){ clearInterval(iv); setProgress(100); setTimeout(()=>{ setState("done"); onToast("Informe generado · "+rep.id); openReport(); },300); } else setProgress(p); },140);
   };
 
   return (
     <GlassCard accent={rep.overdue ? "#E53BF6" : "#22c55e"}>
       <div style={{ padding:"16px 18px", display:"flex", flexDirection:"column", gap:10, position:"relative", overflow:"hidden" }}>
-        {state==="done" && <div style={{ position:"absolute", inset:0, background:"rgba(34,197,94,0.1)", display:"flex", alignItems:"center", justifyContent:"center", gap:10, zIndex:5 }}><svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg><span style={{ fontFamily:"Poppins, sans-serif", fontWeight:700, color:"#22c55e", fontSize:"0.88rem" }}>Informe generado</span></div>}
+        {state==="done" && (
+          <div style={{ position:"absolute", inset:0, background:"rgba(34,197,94,0.1)", display:"flex", alignItems:"center", justifyContent:"center", gap:12, zIndex:5, padding:"0 16px", flexWrap:"wrap" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="#22c55e" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <span style={{ fontFamily:"Poppins, sans-serif", fontWeight:700, color:"#22c55e", fontSize:"0.88rem" }}>{signed ? "Informe firmado" : "Informe generado"}</span>
+            </div>
+            <button onClick={openReport} style={{ padding:"7px 14px", borderRadius:10, cursor:"pointer", background:"rgba(34,197,94,0.15)", borderTop:"1px solid rgba(34,197,94,0.45)", borderRight:"1px solid rgba(34,197,94,0.45)", borderBottom:"1px solid rgba(34,197,94,0.45)", borderLeft:"1px solid rgba(34,197,94,0.45)", color:"#22c55e", fontSize:"0.68rem", fontWeight:800, fontFamily:"Poppins, sans-serif" }}>
+              {signed ? "Ver informe" : "Abrir y firmar"}
+            </button>
+          </div>
+        )}
 
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
           <div>
@@ -232,7 +262,7 @@ function ReportCard({ rep, onToast }: { rep:ReportItem; onToast:(m:string)=>void
 }
 
 /* ── Section: Inicio ────────────────────────────────────── */
-function InicioSection({ onNavigate, onToast }: { onNavigate:(s:Section)=>void; onToast:(m:string)=>void }) {
+function InicioSection({ onNavigate, reports, onToast }: { onNavigate:(s:Section)=>void; reports:ReportsCtx; onToast:(m:string)=>void }) {
   const pending   = EVALUACIONES.filter(e=>e.status==="Pendiente").length;
   const overdueCt = INFORMES.filter(r=>r.overdue).length;
 
@@ -287,7 +317,7 @@ function InicioSection({ onNavigate, onToast }: { onNavigate:(s:Section)=>void; 
         <p style={{ fontSize:"0.6rem", fontWeight:700, color:"rgba(148,163,184,0.3)", textTransform:"uppercase", letterSpacing:"0.12em", fontFamily:"Poppins, sans-serif", marginBottom:12 }}>EVALUACIONES DE HOY</p>
         <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
           {EVALUACIONES.filter(e=>e.status!=="Completado").map(ev=>(
-            <EvalCard key={ev.id} ev={ev} onToast={onToast} />
+            <EvalCard key={ev.id} ev={ev} signer={reports.signer} signed={!!reports.signatures[reportIdForEvaluation(ev)]} onOpenReport={reports.open} onToast={onToast} />
           ))}
         </div>
       </div>
@@ -296,7 +326,7 @@ function InicioSection({ onNavigate, onToast }: { onNavigate:(s:Section)=>void; 
 }
 
 /* ── Section: Evaluaciones (all) ────────────────────────── */
-function EvaluacionesSection({ onToast }: { onToast:(m:string)=>void }) {
+function EvaluacionesSection({ reports, onToast }: { reports:ReportsCtx; onToast:(m:string)=>void }) {
   const [filter, setFilter] = useState<EvalStatus|"Todas">("Todas");
   const filtered = filter==="Todas" ? EVALUACIONES : EVALUACIONES.filter(e=>e.status===filter);
   return (
@@ -309,7 +339,7 @@ function EvaluacionesSection({ onToast }: { onToast:(m:string)=>void }) {
         })}
       </div>
       <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-        {filtered.map(ev=><EvalCard key={ev.id} ev={ev} onToast={onToast}/>)}
+        {filtered.map(ev=><EvalCard key={ev.id} ev={ev} signer={reports.signer} signed={!!reports.signatures[reportIdForEvaluation(ev)]} onOpenReport={reports.open} onToast={onToast}/>)}
       </div>
     </div>
   );
@@ -373,7 +403,7 @@ function CalendarioSection() {
 }
 
 /* ── Section: Reportes ──────────────────────────────────── */
-function ReportesSection({ onToast }: { onToast:(m:string)=>void }) {
+function ReportesSection({ reports, onToast }: { reports:ReportsCtx; onToast:(m:string)=>void }) {
   const overdue = INFORMES.filter(r=>r.overdue);
   const recent  = INFORMES.filter(r=>!r.overdue);
   return (
@@ -381,11 +411,11 @@ function ReportesSection({ onToast }: { onToast:(m:string)=>void }) {
       <SectionHeader title="Pendientes de Informe" subtitle={`${INFORMES.length} reportes · ${overdue.length} vencidos`} />
       {overdue.length > 0 && <>
         <p style={{ fontSize:"0.6rem", fontWeight:700, color:"rgba(229,59,246,0.5)", textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"Poppins, sans-serif" }}>⚠ VENCIDOS</p>
-        {overdue.map(r=><ReportCard key={r.id} rep={r} onToast={onToast}/>)}
+        {overdue.map(r=><ReportCard key={r.id} rep={r} signer={reports.signer} signed={!!reports.signatures[r.id]} onOpenReport={reports.open} onToast={onToast}/>)}
       </>}
       {recent.length > 0 && <>
         <p style={{ fontSize:"0.6rem", fontWeight:700, color:"rgba(148,163,184,0.3)", textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"Poppins, sans-serif", marginTop:8 }}>RECIENTES</p>
-        {recent.map(r=><ReportCard key={r.id} rep={r} onToast={onToast}/>)}
+        {recent.map(r=><ReportCard key={r.id} rep={r} signer={reports.signer} signed={!!reports.signatures[r.id]} onOpenReport={reports.open} onToast={onToast}/>)}
       </>}
     </div>
   );
@@ -452,10 +482,11 @@ function ConfiguracionSection({ userName, onToast }:{ userName:string; onToast:(
 
 /* ══ Main Component ═════════════════════════════════════════ */
 export default function TechnicianDashboard({
-  onBack, userName = "Carlos Méndez",
+  onBack, userName = "Carlos Méndez", userEmail,
 }: {
   onBack?: () => void;
   userName?: string;
+  userEmail?: string;
 }) {
   const width    = useWidth();
   const isMobile = width < 768;
@@ -465,6 +496,10 @@ export default function TechnicianDashboard({
   const [section,    setSection]   = useState<Section>("inicio");
   const [drawerOpen, setDrawer]    = useState(false);
   const [toast,      setToast]     = useState<string|null>(null);
+  const [activeReport, setActiveReport] = useState<ReportData|null>(null);
+  /* Firmas de esta sesión, por id de informe: un informe firmado no se vuelve a firmar. */
+  const [signatures, setSignatures] = useState<Record<string,ReportSignature>>({});
+  const reports: ReportsCtx = { signer:{ name:userName, email:userEmail }, signatures, open:setActiveReport };
 
   const showToast = (msg:string) => { setToast(msg); setTimeout(()=>setToast(null),2800); };
 
@@ -555,10 +590,10 @@ export default function TechnicianDashboard({
           </header>
 
           <div key={section} className="hide-scroll" style={{ flex:1, overflowY:"auto", padding:isMobile?"16px 14px 84px":"24px 28px 36px" }}>
-            {section==="inicio"        && <InicioSection onNavigate={setSection} onToast={showToast}/>}
-            {section==="evaluaciones"  && <EvaluacionesSection onToast={showToast}/>}
+            {section==="inicio"        && <InicioSection onNavigate={setSection} reports={reports} onToast={showToast}/>}
+            {section==="evaluaciones"  && <EvaluacionesSection reports={reports} onToast={showToast}/>}
             {section==="calendario"    && <CalendarioSection/>}
-            {section==="reportes"      && <ReportesSection onToast={showToast}/>}
+            {section==="reportes"      && <ReportesSection reports={reports} onToast={showToast}/>}
             {section==="configuracion" && <ConfiguracionSection userName={userName} onToast={showToast}/>}
           </div>
         </main>
@@ -588,6 +623,17 @@ export default function TechnicianDashboard({
               );
             })}
           </div>
+        )}
+
+        {activeReport && (
+          <ReportViewer
+            report={activeReport}
+            signature={signatures[activeReport.id] ?? null}
+            canSign
+            onSign={sig=>setSignatures(prev=>({ ...prev, [activeReport.id]:sig }))}
+            onClose={()=>setActiveReport(null)}
+            onToast={showToast}
+          />
         )}
 
         {toast && <div style={{ position:"fixed", bottom:isMobile?74:24, left:"50%", transform:"translateX(-50%)", zIndex:90, display:"flex", alignItems:"center", gap:10, padding:"11px 18px", borderRadius:13, whiteSpace:"nowrap", background:"rgba(8,14,28,0.97)", backdropFilter:"blur(24px)", borderTop:"1px solid rgba(59,246,229,0.4)", borderRight:"1px solid rgba(59,246,229,0.4)", borderBottom:"1px solid rgba(59,246,229,0.4)", borderLeft:"1px solid rgba(59,246,229,0.4)", boxShadow:"0 16px 48px rgba(0,0,0,0.6)", animation:"tdToast 0.3s cubic-bezier(.22,1,.36,1) both" }}>

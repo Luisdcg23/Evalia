@@ -189,6 +189,7 @@ export default function App() {
       return (
         <TechnicianDashboard
           userName={loggedUser.name}
+          userEmail={loggedUser.email}
           onBack={doLogout}
         />
       );

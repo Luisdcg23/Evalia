@@ -8,6 +8,13 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
 
 ### Agregado
 
+- Informe de evaluación en PDF (jsPDF) para el técnico evaluador: «Generar» en
+  Pendientes de informe y «Completada · Generar informe» abren un visor con el
+  documento, que se puede imprimir o descargar. El pie lleva el recuadro
+  «Firma del técnico»; el diálogo «¿Firmar este informe?» pide el nombre en
+  cada firma y lo estampa en cursiva (fuente Mr Dafoe, OFL) junto al nombre
+  completo del usuario con sesión y la fecha. Coordinador y empresa solo
+  descargan el informe ya firmado; no vuelven a firmar.
 - Escalas de riesgo versionadas (riesgo de producto y frecuencia) y versiones
   de reglas de riesgo, con procedimiento transaccional para registrar un
   cálculo (`sp_registrar_calculo_riesgo`) y bloqueo de modificación sobre

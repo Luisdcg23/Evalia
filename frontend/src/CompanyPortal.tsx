@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { listCompanies } from "./features/companies/api";
 import { createAndSubmitRequest, listBpmRequests, type BpmRequest } from "./features/requests/api";
+import ReportViewer from "./features/reports/ReportViewer";
+import type { ReportRisk, SignedReport } from "./features/reports/report-pdf";
 
 function useWidth() {
   const [w, setW] = useState(() => window.innerWidth);
@@ -573,7 +575,7 @@ function PerfilSection({ isMobile, onToast }: { isMobile:boolean; onToast:(m:str
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Evaluaciones (historial) ───────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function EvaluacionesSection({ onToast }: { onToast:(m:string)=>void }) {
+function EvaluacionesSection({ onOpenReport }: { onOpenReport:(r:SignedReport)=>void }) {
   const EVS = [
     { id:"EBR-2026-0087", tipo:"Auditoría Calidad",    fecha:"28 ago 2026", tecnico:"Ing. R. Méndez",    estado:"Aprobado",    riesgo:"Alto",     color:"#22c55e" },
     { id:"EBR-2026-0083", tipo:"Evaluación General",   fecha:"22 ago 2026", tecnico:"Ing. M. Santos",    estado:"En Revisión", riesgo:"Crítico",  color:"#8b5cf6" },
@@ -608,7 +610,7 @@ function EvaluacionesSection({ onToast }: { onToast:(m:string)=>void }) {
               <span style={{ padding:"2px 9px", borderRadius:99, fontSize:"0.6rem", fontWeight:700, color:ev.color, background:`${ev.color}14`, borderTop:`1px solid ${ev.color}40`, borderRight:`1px solid ${ev.color}40`, borderBottom:`1px solid ${ev.color}40`, borderLeft:`1px solid ${ev.color}40`, fontFamily:"Poppins, sans-serif" }}>{ev.estado}</span>
               <span style={{ fontSize:"0.55rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif" }}>{ev.riesgo}</span>
             </div>
-            {ev.estado==="Aprobado" && <button onClick={()=>onToast("PDF descargado · "+ev.id)} style={{ width:32, height:32, borderRadius:9, cursor:"pointer", background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.3)", borderRight:"1px solid rgba(34,197,94,0.3)", borderBottom:"1px solid rgba(34,197,94,0.3)", borderLeft:"1px solid rgba(34,197,94,0.3)", color:"#22c55e", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></button>}
+            {ev.estado==="Aprobado" && <button onClick={()=>onOpenReport({ report:{ id:ev.id, empresa:COMPANY_DATA.razonSocial, tipo:ev.tipo, riesgo:ev.riesgo as ReportRisk, fecha:ev.fecha, tecnico:ev.tecnico }, signature:{ signerName:ev.tecnico, signedAt:ev.fecha } })} style={{ width:32, height:32, borderRadius:9, cursor:"pointer", background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.3)", borderRight:"1px solid rgba(34,197,94,0.3)", borderBottom:"1px solid rgba(34,197,94,0.3)", borderLeft:"1px solid rgba(34,197,94,0.3)", color:"#22c55e", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></button>}
           </div>
         ))}
       </div>
@@ -685,6 +687,8 @@ export default function CompanyPortal({
   const [companyId, setCompanyId] = useState<number | null>(null);
   const [newEntryId,  setNewEntryId]  = useState<string|null>(null);
   const [toast,       setToast]       = useState<string|null>(null);
+  /* Informe ya firmado por el técnico: la empresa solo lo descarga o imprime. */
+  const [signedReport, setSignedReport] = useState<SignedReport|null>(null);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(()=>setToast(null), 2800); };
 
@@ -837,7 +841,7 @@ export default function CompanyPortal({
             {activeTab==="nueva-solicitud" && <NuevaSolicitudSection onSubmit={handleFormSubmit} onCancel={()=>navigate("dashboard")}/>}
             {activeTab==="solicitudes"     && <SolicitudesSection solicitudes={solicitudes} newId={newEntryId} onToast={showToast} onNavigate={navigate}/>}
             {activeTab==="perfil"          && <PerfilSection isMobile={isMobile} onToast={showToast}/>}
-            {activeTab==="evaluaciones"    && <EvaluacionesSection onToast={showToast}/>}
+            {activeTab==="evaluaciones"    && <EvaluacionesSection onOpenReport={setSignedReport}/>}
             {activeTab==="configuracion"   && <ConfiguracionSection onToast={showToast}/>}
           </div>
         </main>
@@ -869,6 +873,8 @@ export default function CompanyPortal({
             })}
           </div>
         )}
+
+        {signedReport && <ReportViewer report={signedReport.report} signature={signedReport.signature} canSign={false} onClose={()=>setSignedReport(null)} onToast={showToast}/>}
 
         {toast && (
           <div style={{ position:"fixed", bottom:isMobile?74:24, left:"50%", transform:"translateX(-50%)", zIndex:90, display:"flex", alignItems:"center", gap:10, padding:"12px 20px", borderRadius:14, whiteSpace:"nowrap", background:"rgba(8,14,28,0.97)", backdropFilter:"blur(24px)", borderTop:"1px solid rgba(59,246,229,0.4)", borderRight:"1px solid rgba(59,246,229,0.4)", borderBottom:"1px solid rgba(59,246,229,0.4)", borderLeft:"1px solid rgba(59,246,229,0.4)", boxShadow:"0 16px 48px rgba(0,0,0,0.6), 0 0 24px rgba(59,246,229,0.15)", animation:"cpToast 0.3s cubic-bezier(.22,1,.36,1) both" }}>
