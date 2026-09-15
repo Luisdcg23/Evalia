@@ -12,9 +12,12 @@ public static class BpmRequestEndpoints
     {
         var group = endpoints.MapGroup("/api/bpm-requests").WithTags("Solicitudes BPM").RequireAuthorization();
         group.MapGet("/", ListAsync);
+        group.MapGet("/{id:int}", GetAsync);
         group.MapPost("/", CreateAsync).RequireAuthorization(policy => policy.RequireRole(
             SystemRoles.Administrator, SystemRoles.CompanyAdministrator, SystemRoles.DelegateUser));
         group.MapPut("/{id:int}", UpdateAsync).RequireAuthorization(policy => policy.RequireRole(
+            SystemRoles.Administrator, SystemRoles.CompanyAdministrator, SystemRoles.DelegateUser));
+        group.MapPost("/{id:int}/documents", AddDocumentAsync).RequireAuthorization(policy => policy.RequireRole(
             SystemRoles.Administrator, SystemRoles.CompanyAdministrator, SystemRoles.DelegateUser));
         group.MapPost("/{id:int}/submit", SubmitAsync).RequireAuthorization(policy => policy.RequireRole(
             SystemRoles.Administrator, SystemRoles.CompanyAdministrator, SystemRoles.DelegateUser));
@@ -29,7 +32,25 @@ public static class BpmRequestEndpoints
             if (!TryUserId(principal, out var userId)) return Results.Unauthorized();
             query = query.Where(item => context.CompanyUsers.Any(link => link.CompanyId == item.CompanyId && link.UserId == userId));
         }
-        return Results.Ok(await query.OrderByDescending(item => item.CreatedAt).ToListAsync(cancellationToken));
+
+        var items = await query.OrderByDescending(item => item.CreatedAt).ToListAsync(cancellationToken);
+        var ids = items.Select(item => item.Id).ToList();
+        var documents = await context.BpmRequestDocuments.AsNoTracking()
+            .Where(document => ids.Contains(document.BpmRequestId))
+            .ToListAsync(cancellationToken);
+        return Results.Ok(items.Select(item => ToResponse(item, documents.Where(document => document.BpmRequestId == item.Id).ToList())));
+    }
+
+    private static async Task<IResult> GetAsync(int id, ClaimsPrincipal principal, EbrDbContext context, CancellationToken cancellationToken)
+    {
+        if (!TryUserId(principal, out var userId)) return Results.Unauthorized();
+        var item = await context.BpmRequests.AsNoTracking().SingleOrDefaultAsync(value => value.Id == id, cancellationToken);
+        if (item is null || !await CanAccessCompanyAsync(item.CompanyId, userId, principal, context, cancellationToken)) return Results.NotFound();
+        var documents = await context.BpmRequestDocuments.AsNoTracking()
+            .Where(document => document.BpmRequestId == id)
+            .OrderBy(document => document.UploadedAt)
+            .ToListAsync(cancellationToken);
+        return Results.Ok(ToResponse(item, documents));
     }
 
     private static async Task<IResult> CreateAsync(CreateRequest request, ClaimsPrincipal principal, EbrDbContext context, CancellationToken cancellationToken)
@@ -47,7 +68,7 @@ public static class BpmRequestEndpoints
         };
         context.BpmRequests.Add(item);
         await context.SaveChangesAsync(cancellationToken);
-        return Results.Created($"/api/bpm-requests/{item.Id}", item);
+        return Results.Created($"/api/bpm-requests/{item.Id}", ToResponse(item, []));
     }
 
     private static async Task<IResult> UpdateAsync(int id, CreateRequest request, ClaimsPrincipal principal, EbrDbContext context, CancellationToken cancellationToken)
@@ -63,7 +84,47 @@ public static class BpmRequestEndpoints
         item.UpdatedAt = DateTimeOffset.UtcNow;
         item.VersionToken = Guid.NewGuid();
         await context.SaveChangesAsync(cancellationToken);
-        return Results.Ok(item);
+        var documents = await context.BpmRequestDocuments.AsNoTracking()
+            .Where(document => document.BpmRequestId == id)
+            .OrderBy(document => document.UploadedAt)
+            .ToListAsync(cancellationToken);
+        return Results.Ok(ToResponse(item, documents));
+    }
+
+    private static async Task<IResult> AddDocumentAsync(
+        int id,
+        AddDocumentRequest request,
+        ClaimsPrincipal principal,
+        EbrDbContext context,
+        CancellationToken cancellationToken)
+    {
+        if (!TryUserId(principal, out var userId)) return Results.Unauthorized();
+        var item = await context.BpmRequests.SingleOrDefaultAsync(value => value.Id == id, cancellationToken);
+        if (item is null || !await CanAccessCompanyAsync(item.CompanyId, userId, principal, context, cancellationToken)) return Results.NotFound();
+        if (string.IsNullOrWhiteSpace(request.DocumentType) || string.IsNullOrWhiteSpace(request.FileName) ||
+            string.IsNullOrWhiteSpace(request.MimeType) || string.IsNullOrWhiteSpace(request.Hash) ||
+            string.IsNullOrWhiteSpace(request.StorageReference) || request.SizeBytes <= 0)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["document"] = ["Tipo de documento, nombre de archivo, tipo MIME, tamaño, hash y referencia de " +
+                    "almacenamiento son obligatorios."]
+            });
+        }
+
+        var document = new BpmRequestDocument
+        {
+            BpmRequestId = id,
+            DocumentType = request.DocumentType.Trim(),
+            FileName = request.FileName.Trim(),
+            MimeType = request.MimeType.Trim(),
+            SizeBytes = request.SizeBytes,
+            Hash = request.Hash.Trim(),
+            StorageReference = request.StorageReference.Trim()
+        };
+        context.BpmRequestDocuments.Add(document);
+        await context.SaveChangesAsync(cancellationToken);
+        return Results.Created($"/api/bpm-requests/{id}/documents/{document.Id}", document);
     }
 
     private static async Task<IResult> SubmitAsync(int id, ClaimsPrincipal principal, EbrDbContext context, CancellationToken cancellationToken)
@@ -75,6 +136,14 @@ public static class BpmRequestEndpoints
             item => item.SourceType == "BPM_REQUEST" && item.SourceReferenceId == id, cancellationToken);
         if (existing is not null) return Results.Ok(existing);
         if (request.Status != BpmRequestStatuses.Draft) return Results.Conflict(new { message = "La solicitud no puede enviarse desde su estado actual." });
+        // RF-05 exige la documentación obligatoria adjunta antes de enviar la solicitud.
+        var hasRequiredDocumentation = await context.BpmRequestDocuments.AnyAsync(
+            document => document.BpmRequestId == id, cancellationToken);
+        if (!hasRequiredDocumentation)
+        {
+            return Results.Conflict(new { message = "La solicitud no tiene adjunta la documentación obligatoria." });
+        }
+
         var now = DateTimeOffset.UtcNow;
         request.Status = BpmRequestStatuses.Submitted;
         request.SubmittedAt = now;
@@ -91,6 +160,22 @@ public static class BpmRequestEndpoints
         await context.SaveChangesAsync(cancellationToken);
         return Results.Ok(inspectionCase);
     }
+
+    private static object ToResponse(BpmRequest item, IReadOnlyList<BpmRequestDocument> documents) => new
+    {
+        item.Id,
+        item.CompanyId,
+        item.EstablishmentType,
+        item.Reason,
+        item.Observations,
+        item.Status,
+        item.CreatedBy,
+        item.CreatedAt,
+        item.UpdatedAt,
+        item.SubmittedAt,
+        item.VersionToken,
+        Documents = documents
+    };
 
     private static bool IsCompanyUser(ClaimsPrincipal principal) =>
         principal.IsInRole(SystemRoles.CompanyAdministrator) || principal.IsInRole(SystemRoles.DelegateUser);
@@ -109,4 +194,12 @@ public static class BpmRequestEndpoints
     });
 
     private sealed record CreateRequest(int CompanyId, string EstablishmentType, string Reason, string? Observations);
+
+    private sealed record AddDocumentRequest(
+        string DocumentType,
+        string FileName,
+        string MimeType,
+        long SizeBytes,
+        string Hash,
+        string StorageReference);
 }

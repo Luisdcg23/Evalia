@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using EBR.Application.Email;
 using EBR.Domain.Identity;
 using EBR.Infrastructure.Identity;
 using EBR.Infrastructure.Persistence;
@@ -7,13 +8,15 @@ using Microsoft.EntityFrameworkCore;
 
 namespace EBR.Api.Endpoints;
 
-public static class UserEndpoints
+public static partial class UserEndpoints
 {
     public static IEndpointRouteBuilder MapUserEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/api/users").WithTags("Usuarios").RequireAuthorization();
         group.MapGet("/me", GetCurrentAsync);
         group.MapGet("/pending", GetPendingAsync).RequireAuthorization(policy =>
+            policy.RequireRole(SystemRoles.Administrator));
+        group.MapGet("/{id:guid}/registration-documents", GetRegistrationDocumentsAsync).RequireAuthorization(policy =>
             policy.RequireRole(SystemRoles.Administrator));
         group.MapPost("/{id:guid}/approve", ApproveAsync).RequireAuthorization(policy =>
             policy.RequireRole(SystemRoles.Administrator));
@@ -58,27 +61,58 @@ public static class UserEndpoints
         });
     }
 
-    private static async Task<IResult> GetPendingAsync(UserManager<ApplicationUser> userManager)
+    private static async Task<IResult> GetPendingAsync(
+        UserManager<ApplicationUser> userManager,
+        EbrDbContext context,
+        CancellationToken cancellationToken)
     {
         var users = await userManager.Users
             .Where(user => user.ApprovalStatus == UserApprovalStatus.PendingValidation)
             .OrderBy(user => user.FullName)
-            .Select(user => new
-            {
-                user.Id,
-                Email = user.Email ?? string.Empty,
-                user.FullName,
-                user.DocumentNumber,
-                user.PhoneNumber,
-                user.RequestedRole
-            })
-            .ToListAsync();
-        return Results.Ok(users);
+            .ToListAsync(cancellationToken);
+        var userIds = users.Select(user => user.Id).ToList();
+        var documents = await context.UserRegistrationDocuments.AsNoTracking()
+            .Where(document => userIds.Contains(document.UserId))
+            .ToListAsync(cancellationToken);
+
+        return Results.Ok(users.Select(user => new
+        {
+            user.Id,
+            Email = user.Email ?? string.Empty,
+            user.FullName,
+            user.DocumentNumber,
+            user.PhoneNumber,
+            user.RequestedRole,
+            RegistrationDocuments = documents.Where(document => document.UserId == user.Id).ToList()
+        }));
+    }
+
+    private static async Task<IResult> GetRegistrationDocumentsAsync(
+        Guid id,
+        UserManager<ApplicationUser> userManager,
+        EbrDbContext context,
+        CancellationToken cancellationToken)
+    {
+        var user = await userManager.FindByIdAsync(id.ToString());
+        if (user is null)
+        {
+            return Results.NotFound();
+        }
+
+        var documents = await context.UserRegistrationDocuments.AsNoTracking()
+            .Where(document => document.UserId == id)
+            .OrderBy(document => document.UploadedAt)
+            .ToListAsync(cancellationToken);
+        return Results.Ok(documents);
     }
 
     private static async Task<IResult> ApproveAsync(
         Guid id,
-        UserManager<ApplicationUser> userManager)
+        UserManager<ApplicationUser> userManager,
+        IEmailSender emailSender,
+        IConfiguration configuration,
+        ILogger<Program> logger,
+        CancellationToken cancellationToken)
     {
         var user = await userManager.FindByIdAsync(id.ToString());
         if (user is null)
@@ -104,13 +138,23 @@ public static class UserEndpoints
 
         user.ApprovalStatus = UserApprovalStatus.Approved;
         var updateResult = await userManager.UpdateAsync(user);
-        return updateResult.Succeeded ? Results.NoContent() : Results.Problem("No fue posible aprobar el usuario.");
+        if (!updateResult.Succeeded)
+        {
+            return Results.Problem("No fue posible aprobar el usuario.");
+        }
+
+        var content = EmailTemplates.RegistrationApproved(user.FullName, configuration["Frontend:Origin"]);
+        await SendDecisionEmailAsync(emailSender, logger, user.Email, content, cancellationToken);
+        return Results.NoContent();
     }
 
     private static async Task<IResult> RejectAsync(
         Guid id,
         RejectUserRequest request,
-        UserManager<ApplicationUser> userManager)
+        UserManager<ApplicationUser> userManager,
+        IEmailSender emailSender,
+        ILogger<Program> logger,
+        CancellationToken cancellationToken)
     {
         var user = await userManager.FindByIdAsync(id.ToString());
         if (user is null)
@@ -123,11 +167,39 @@ public static class UserEndpoints
             return Results.Conflict();
         }
 
+        var reason = request.Reason?.Trim();
         user.ApprovalStatus = UserApprovalStatus.Rejected;
-        user.RejectionReason = request.Reason?.Trim();
+        user.RejectionReason = reason;
         var result = await userManager.UpdateAsync(user);
-        return result.Succeeded ? Results.NoContent() : Results.Problem("No fue posible rechazar el usuario.");
+        if (!result.Succeeded)
+        {
+            return Results.Problem("No fue posible rechazar el usuario.");
+        }
+
+        var content = EmailTemplates.RegistrationRejected(user.FullName, reason);
+        await SendDecisionEmailAsync(emailSender, logger, user.Email, content, cancellationToken);
+        return Results.NoContent();
     }
+
+    // El correo es un complemento del aviso de aprobación/rechazo, nunca un requisito: un proveedor
+    // SMTP caído no puede bloquear la decisión del administrador sobre un registro pendiente.
+    private static async Task SendDecisionEmailAsync(
+        IEmailSender emailSender, ILogger<Program> logger, string? toEmail, EmailTemplates.EmailContent content,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(toEmail)) return;
+        try
+        {
+            await emailSender.SendAsync(toEmail, content.Subject, content.PlainText, content.Html, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            LogRegistrationDecisionEmailFailed(logger, toEmail, ex);
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "No fue posible enviar el correo de decisión de registro a {ToEmail}.")]
+    private static partial void LogRegistrationDecisionEmailFailed(ILogger logger, string toEmail, Exception ex);
 
     private sealed record RejectUserRequest(string? Reason);
 }

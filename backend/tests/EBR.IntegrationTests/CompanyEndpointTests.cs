@@ -75,7 +75,8 @@ public sealed class CompanyEndpointTests : IClassFixture<EbrApiFactory>
             fullName = "Representante Autorizado",
             documentNumber = "001-1234567-8",
             email = "representante@example.local",
-            phoneNumber = "8095550199"
+            phoneNumber = "8095550199",
+            representativeType = "LEGAL"
         }, companyToken);
 
         var administratorToken = await LoginAsync("admin@ebr.local");
@@ -92,7 +93,8 @@ public sealed class CompanyEndpointTests : IClassFixture<EbrApiFactory>
             fullName = "Representante no autorizado",
             documentNumber = "001-7654321-0",
             email = "otro@example.local",
-            phoneNumber = "8095550188"
+            phoneNumber = "8095550188",
+            representativeType = "LEGAL"
         }, companyToken);
 
         Assert.Equal(HttpStatusCode.Created, ownResponse.StatusCode);
@@ -116,7 +118,8 @@ public sealed class CompanyEndpointTests : IClassFixture<EbrApiFactory>
             fullName = "Representante",
             documentNumber = "001-1111111-1",
             email = "relacionado@example.local",
-            phoneNumber = "8095550177"
+            phoneNumber = "8095550177",
+            representativeType = "LEGAL"
         }, administratorToken);
         representative.EnsureSuccessStatusCode();
 

@@ -1,4 +1,4 @@
-using EBR.Application.Identity;
+﻿using EBR.Application.Identity;
 using EBR.Infrastructure.Identity;
 using EBR.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Identity;
@@ -8,6 +8,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using EBR.Infrastructure.Risk;
 using EBR.Application.Risk;
+using EBR.Application.Evaluations;
+using EBR.Application.Email;
+using EBR.Application.Evidence;
+using EBR.Application.Reports;
+using EBR.Infrastructure.Email;
+using EBR.Infrastructure.Evaluations;
+using EBR.Infrastructure.Evidence;
+using EBR.Infrastructure.Reports;
 
 namespace EBR.Infrastructure;
 
@@ -55,9 +63,44 @@ public static class DependencyInjection
                 .ValidateOnStart();
             services.AddScoped<IAuthenticationService, AuthenticationService>();
             services.AddScoped<IRiskCalculationService, RiskCalculationService>();
+            services.AddScoped<IEvaluationSubmissionService, EvaluationSubmissionService>();
+            services.AddScoped<RiskRuleVersionProvisioner>();
         }
 
         services.AddSingleton<IRiskFormulaService, RiskFormulaService>();
+
+        // Licencia Community de QuestPDF, fijada al arranque para la generación del PDF oficial (RF-19).
+        QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+        services.AddSingleton<IOfficialReportRenderer, OfficialReportRenderer>();
+
+        // Firma electrónica del PDF oficial (RF-19): a diferencia de MinIO/correo no hay proveedor
+        // externo que activar condicionalmente — la clave RSA del sistema siempre es local y se
+        // autogenera en el primer arranque si no existe todavía.
+        services.AddOptions<SigningOptions>()
+            .Bind(configuration.GetSection(SigningOptions.SectionName));
+        services.AddSingleton<IDocumentSigner, RsaFileDocumentSigner>();
+
+        // Almacenamiento de evidencias: la abstracción es la misma para todos los entornos y solo
+        // cambia la implementación. Sin extremo de MinIO configurado se usa el sistema de archivos
+        // local, que reproduce la misma semántica de bucket sin exigir un servicio adicional.
+        services.AddOptions<EvidenceStorageOptions>()
+            .Bind(configuration.GetSection(EvidenceStorageOptions.SectionName));
+        var evidenceEndpoint = configuration[$"{EvidenceStorageOptions.SectionName}:Endpoint"];
+        if (string.IsNullOrWhiteSpace(evidenceEndpoint))
+            services.AddSingleton<IEvidenceStorage, FileSystemEvidenceStorage>();
+        else
+            services.AddSingleton<IEvidenceStorage, MinioEvidenceStorage>();
+
+        // Envío de correo: mismo criterio que el almacenamiento de evidencias. Sin host SMTP
+        // configurado se usa un envío nulo que solo registra en el log, para no exigir un proveedor
+        // real en desarrollo o en las pruebas.
+        services.AddOptions<EmailOptions>()
+            .Bind(configuration.GetSection(EmailOptions.SectionName));
+        var emailHost = configuration[$"{EmailOptions.SectionName}:Host"];
+        if (string.IsNullOrWhiteSpace(emailHost))
+            services.AddSingleton<IEmailSender, NullEmailSender>();
+        else
+            services.AddSingleton<IEmailSender, SmtpEmailSender>();
 
         return services;
     }

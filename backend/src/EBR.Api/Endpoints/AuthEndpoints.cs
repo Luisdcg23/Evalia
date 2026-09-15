@@ -1,3 +1,4 @@
+using EBR.Application.Email;
 using EBR.Application.Identity;
 using EBR.Domain.Identity;
 using EBR.Infrastructure.Identity;
@@ -11,7 +12,7 @@ using EBR.Infrastructure.Persistence;
 
 namespace EBR.Api.Endpoints;
 
-public static class AuthEndpoints
+public static partial class AuthEndpoints
 {
     public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder endpoints)
     {
@@ -61,19 +62,37 @@ public static class AuthEndpoints
 
     private static async Task<IResult> RegisterAsync(
         RegisterRequest request,
-        UserManager<ApplicationUser> userManager)
+        UserManager<ApplicationUser> userManager,
+        EbrDbContext context,
+        CancellationToken cancellationToken)
     {
         var allowedRoles = new[] { SystemRoles.CompanyAdministrator, SystemRoles.DelegateUser };
+        var errors = new Dictionary<string, string[]>();
         if (string.IsNullOrWhiteSpace(request.FullName) ||
             string.IsNullOrWhiteSpace(request.DocumentNumber) ||
             string.IsNullOrWhiteSpace(request.Email) ||
             string.IsNullOrWhiteSpace(request.Password) ||
             !allowedRoles.Contains(request.RequestedRole, StringComparer.Ordinal))
         {
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            {
-                ["registration"] = ["Los datos de registro o el rol solicitado no son válidos."]
-            });
+            errors["registration"] = ["Los datos de registro o el rol solicitado no son válidos."];
+        }
+
+        // RF-02 exige la carta de autorización como adjunto obligatorio del registro. Se
+        // rechaza el alta si falta cualquiera de sus metadatos; no se acepta un registro
+        // incompleto para completarlo después.
+        if (string.IsNullOrWhiteSpace(request.AuthorizationLetterFileName) ||
+            string.IsNullOrWhiteSpace(request.AuthorizationLetterMimeType) ||
+            string.IsNullOrWhiteSpace(request.AuthorizationLetterHash) ||
+            string.IsNullOrWhiteSpace(request.AuthorizationLetterStorageReference) ||
+            request.AuthorizationLetterSizeBytes <= 0)
+        {
+            errors["authorizationLetter"] = ["La carta de autorización es un adjunto obligatorio del registro: " +
+                "se requieren nombre de archivo, tipo MIME, tamaño, hash y referencia de almacenamiento."];
+        }
+
+        if (errors.Count > 0)
+        {
+            return Results.ValidationProblem(errors);
         }
 
         var email = request.Email.Trim().ToLowerInvariant();
@@ -96,6 +115,18 @@ public static class AuthEndpoints
                 ["registration"] = result.Errors.Select(error => error.Description).ToArray()
             });
         }
+
+        context.UserRegistrationDocuments.Add(new UserRegistrationDocument
+        {
+            UserId = user.Id,
+            DocumentType = UserRegistrationDocumentTypes.AuthorizationLetter,
+            FileName = request.AuthorizationLetterFileName!.Trim(),
+            MimeType = request.AuthorizationLetterMimeType!.Trim(),
+            SizeBytes = request.AuthorizationLetterSizeBytes,
+            Hash = request.AuthorizationLetterHash!.Trim(),
+            StorageReference = request.AuthorizationLetterStorageReference!.Trim()
+        });
+        await context.SaveChangesAsync(cancellationToken);
 
         return Results.Accepted(value: new { user.Id, status = "PENDIENTE_VALIDACION" });
     }
@@ -121,6 +152,8 @@ public static class AuthEndpoints
         UserManager<ApplicationUser> userManager,
         EbrDbContext context,
         IWebHostEnvironment environment,
+        IEmailSender emailSender,
+        ILogger<Program> logger,
         CancellationToken cancellationToken)
     {
         var email = request.Email.Trim().ToLowerInvariant();
@@ -146,6 +179,19 @@ public static class AuthEndpoints
                 ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10)
             });
             await context.SaveChangesAsync(cancellationToken);
+
+            // El correo es un canal externo: si el proveedor falla, no debe tumbar la recuperación de
+            // contraseña ni delatar por su respuesta si la cuenta existe. En Development/Testing el
+            // código igual se devuelve en el cuerpo de la respuesta para poder probar sin bandeja real.
+            try
+            {
+                var content = EmailTemplates.PasswordRecovery(recoveryCode);
+                await emailSender.SendAsync(email, content.Subject, content.PlainText, content.Html, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                LogRecoveryEmailFailed(logger, ex);
+            }
         }
 
         return Results.Accepted(value: new
@@ -223,6 +269,9 @@ public static class AuthEndpoints
     private static string HashRecoveryCode(Guid userId, string code) => Convert.ToHexString(
         SHA256.HashData(Encoding.UTF8.GetBytes($"{userId:N}:{code}")));
 
+    [LoggerMessage(Level = LogLevel.Error, Message = "No fue posible enviar el correo de recuperación de contraseña.")]
+    private static partial void LogRecoveryEmailFailed(ILogger logger, Exception ex);
+
     private sealed record LoginRequest(string Email, string Password);
 
     private sealed record RefreshRequest(string RefreshToken);
@@ -239,5 +288,10 @@ public static class AuthEndpoints
         string? PhoneNumber,
         string Email,
         string Password,
-        string RequestedRole);
+        string RequestedRole,
+        string? AuthorizationLetterFileName = null,
+        string? AuthorizationLetterMimeType = null,
+        long AuthorizationLetterSizeBytes = 0,
+        string? AuthorizationLetterHash = null,
+        string? AuthorizationLetterStorageReference = null);
 }

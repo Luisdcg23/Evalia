@@ -101,6 +101,19 @@ Una versión publicada es inmutable. La invariante está duplicada: en la aplica
 cabecera, los ítems, las opciones, los criterios y las reglas de calificación. Solo se admite la
 transición `DRAFT` a `PUBLISHED`.
 
+`POST /api/evaluation-templates` siembra automáticamente las cuatro opciones evaluables estándar de
+la tabla de arriba (`C`/`CP`/`IT`/`NA`) al crear la plantilla: es el mismo contrato fijo, no una
+plantilla nueva de datos normativos. `POST .../{id}/publish` rechaza con `409` si el número de
+`Plantilla_Evaluacion_Regla` de la plantilla no coincide exactamente con el número de opciones del
+factor estructural `BPM` de la versión de reglas de riesgo publicada vigente (ver
+`RiskCatalogSeeder.BpmFactorCode`, hoy 4 opciones) — esa correspondencia posicional es la que usa
+`EvaluationSubmissionService.BpmFactorOptionAsync` para traducir la banda obtenida al factor BPM del
+cálculo de riesgo; si no coincidiera, el envío de cualquier evaluación de esa plantilla lanzaría una
+excepción no controlada. La validación solo se aplica si ya existe una versión de reglas publicada:
+si no existe ninguna, `StartAsync` ya bloquea el inicio de evaluaciones con su propio `409`, así que
+no hay riesgo de la excepción no controlada y no tiene sentido bloquear la publicación de plantillas
+contra un catálogo de riesgo que todavía no existe.
+
 ### Anomalías registradas de la ficha oficial
 
 No se corrigen ni se completan; se conservan tal como aparecen en la fuente.
@@ -118,6 +131,673 @@ No se corrigen ni se completan; se conservan tal como aparecen en la fuente.
   criterio se identifica internamente como `iii` por su posición.
 - Las marcas de criticidad de la guía aparecen en la fila del criterio o en la inmediata siguiente,
   según cómo estén combinadas las celdas. La lectura respeta esa correspondencia posicional.
+
+## Empresas
+
+`Empresa` incorpora los campos del RF-03: `direccion`, `municipio`, `provincia`, `telefono`,
+`correo` y `actividad_economica` (texto, cadena vacía por defecto). El registro inicial
+(`POST /api/companies`) sigue exigiendo solo razón social, RNC y nombre comercial —igual que antes
+de esta ampliación—, porque el RNC es la identidad fiscal de la empresa y no se ofrece en el alta
+mínima ningún flujo para cambiarlo. El resto del perfil se completa con
+`PUT /api/companies/{id}`, que sí exige los ocho campos (razón social, nombre comercial, dirección,
+municipio, provincia, teléfono, correo con `@` y actividad económica); el RNC no se acepta en esa
+actualización y permanece inmutable tras el alta.
+
+`Empresa.version_token` es un token de concurrencia optimista (mismo patrón que
+`Solicitud_BPM.version_token`). `PUT /api/companies/{id}` exige el token vigente en el cuerpo de la
+solicitud: si no coincide con el valor actual de la fila, la actualización se rechaza con `409` sin
+modificar la empresa ni generar historial. Si coincide, la fila se actualiza y el token se
+regenera.
+
+Cada actualización exitosa que cambia al menos un campo agrega una fila a `Empresa_Historial`
+(`empresa_id`, `fecha_cambio`, `cambiado_por`, `cambios` en `jsonb` con el detalle `{campo: {old,
+new}}` de los campos que cambiaron). El historial es append-only: la invariante se refuerza en
+`EbrDbContext.SaveChanges` (rechaza `Modified`/`Deleted` sobre `CompanyHistoryEntry`) y se duplica
+en PostgreSQL con el disparador `tr_empresa_historial_inmutable`. `GET /api/companies/{id}/history`
+expone las filas ordenadas de la más reciente a la más antigua.
+
+`Representante_Empresa.tipo_representante` normaliza los tres tipos del RF-03 (`LEGAL`, `CALIDAD`,
+`CONTACTO_PRINCIPAL`), reforzados con `CK_Representante_Tipo`. La regla de negocio es que una
+empresa tiene como máximo un representante **activo** por tipo: se valida en el endpoint (`409` si
+ya existe uno activo del mismo tipo) y se duplica en la base con un índice único filtrado por
+vigencia, `IX_Representante_Empresa_empresa_id_tipo_representante_vigente`
+(`UNIQUE (empresa_id, tipo_representante) WHERE vigente`), que permite reactivar el tipo en el
+futuro sin que las filas inactivas históricas bloqueen la restricción.
+
+## Documentos de registro y solicitudes (solo metadatos)
+
+RF-02 exige la carta de autorización como adjunto obligatorio del registro de usuario y RF-05 exige
+documentación obligatoria para las solicitudes BPM. En ambos casos el sistema solo almacena
+**metadatos** del documento (nombre de archivo, tipo MIME, tamaño en bytes, hash y una referencia de
+almacenamiento en texto, por ejemplo una ruta o clave de objeto). El binario nunca se persiste en
+PostgreSQL. Para estas dos entidades la referencia de almacenamiento la declara el cliente y el
+sistema no la resuelve todavía contra el almacenamiento de objetos; la subida efectiva de binarios
+está implementada solo para las evidencias de evaluación (ver "Evidencias de la evaluación en
+campo"). Ninguna de las dos entidades tiene una propiedad de tipo binario.
+
+`Documento_Registro_Usuario` (`UserRegistrationDocument`) se liga al usuario por `usuario_id`.
+`tipo_documento` es un catálogo cerrado (`UserRegistrationDocumentTypes`), hoy con un único valor,
+`CARTA_AUTORIZACION`, reforzado con `CK_Documento_Registro_Tipo`; se modela como catálogo y no como
+texto libre porque el SRS solo define ese adjunto para RF-02, pero deja espacio para agregar otros
+tipos de documento de registro sin cambiar el esquema. **Decisión conservadora**: `POST
+/api/auth/register` exige los cinco metadatos de la carta de autorización (nombre de archivo, tipo
+MIME, tamaño, hash y referencia de almacenamiento) y rechaza el registro completo (`400`) si falta
+alguno; el SRS declara ese adjunto como requerido de RF-02, así que no se acepta un registro
+incompleto para completarlo después. El metadato se guarda en la misma transacción que crea el
+usuario. `GET /api/users/pending` y el nuevo `GET /api/users/{id}/registration-documents` (solo
+`ADMINISTRADOR`) exponen esos metadatos para que el administrador los vea al aprobar o rechazar la
+solicitud de registro.
+
+`Solicitud_BPM_Documento` (`BpmRequestDocument`) se liga a la solicitud por `solicitud_id` y admite
+más de un documento por solicitud. A diferencia del documento de registro, `tipo_documento` es texto
+controlado (`character varying(120)`, no vacío) y no un catálogo cerrado: el SRS describe la
+"documentación obligatoria" de RF-05 sin enumerar una lista cerrada de tipos de documento, así que no
+se inventa esa lista; el control de formato queda en la validación del endpoint
+(`POST /api/bpm-requests/{id}/documents`, mismos roles que pueden crear o editar la solicitud), no en
+una restricción de base de datos. `GET /api/bpm-requests/{id}` (nuevo) y `GET /api/bpm-requests`
+incluyen la lista de documentos de cada solicitud. Los documentos pueden agregarse sin importar el
+estado de la solicitud (`DRAFT` o `SUBMITTED`): adjuntar evidencia adicional después del envío no
+modifica los campos de la solicitud en sí, así que no se sujeta a la misma regla que bloquea la
+edición de una solicitud enviada.
+
+`POST /api/bpm-requests/{id}/submit` ahora exige al menos un documento adjunto: si la solicitud no
+tiene ninguna fila en `Solicitud_BPM_Documento`, el envío se rechaza con `409` sin cambiar el estado,
+antes de comprobar la transición de estado. El envío repetido de una solicitud ya enviada (con
+expediente ya creado) sigue siendo idempotente y no se ve afectado por esta validación, porque esa
+rama corta antes de llegar a la comprobación de documentos.
+
+## Casos y orígenes de evaluación (RF-06)
+
+`Caso` (`InspectionCase`) representa el expediente de inspección. Su origen se identifica con
+`tipo_origen`/`origen_id` (`SourceType`/`SourceReferenceId`), con un índice único
+`IX_Caso_tipo_origen_origen_id` que impide que el mismo origen genere más de un expediente. RF-06
+define cuatro orígenes posibles:
+
+| Origen (`tipo_origen`) | Cómo se genera | Endpoint |
+|---|---|---|
+| `BPM_REQUEST` | Solicitud de empresa enviada (RF-05) | `POST /api/bpm-requests/{id}/submit` |
+| `INSTITUTIONAL` | Programación institucional directa | `POST /api/cases/institutional` |
+| `ALERT` | Alerta LAPCH decidida como `PROCEED` | `POST /api/alerts/{id}/decision` |
+| `COMPLAINT` | Denuncia decidida como `PROCEED` | `POST /api/complaints/{id}/decision` |
+
+`Programacion_Institucional` (`InstitutionalScheduling`) es la tabla de origen del cuarto escenario:
+`ADMINISTRADOR` o `COORDINADOR` programan directamente una evaluación sin que exista una solicitud,
+alerta o denuncia previa. Guarda `empresa_id`, `motivo` (obligatorio) y `observaciones` (opcional),
+igual que el resto de los orígenes documentan su justificación. A diferencia de `Alerta_LAPCH` y
+`Denuncia`, no tiene un paso de decisión intermedio: `POST /api/cases/institutional` crea la fila de
+`Programacion_Institucional` y el `Caso` (`PENDING_ASSIGNMENT`) en la misma operación, porque la
+programación institucional no requiere evaluar si "procede" — la entidad que programa ya decidió que
+la inspección debe realizarse. El expediente resultante recorre el mismo `CaseStateMachine` que
+cualquier otro origen.
+
+**Cierre de alertas y denuncias que no proceden (verificado, sin cambios de comportamiento):**
+`Alerta_LAPCH.resultado` y `Denuncia.resultado` solo aceptan una decisión mientras están en
+`PENDING`; `DecideAlertAsync`/`DecideComplaintAsync` comprueban `item.Status != "PENDING"` antes de
+aplicar cualquier cambio, así que una alerta o denuncia ya decidida (`NOT_PROCEED`, `PROCEED` o, en
+denuncias, `REFERRED`) queda en un estado terminal: una segunda llamada a `/decision` no cambia el
+resultado, no reemplaza el motivo ni la fecha de decisión, y no puede generar un expediente adicional
+(reforzado además por el índice único de `Caso` sobre `tipo_origen`/`origen_id`). `NOT_PROCEED` y
+`REFERRED` son valores de resultado distintos y ambos son terminales; ninguno crea expediente. Esta
+sección documenta el comportamiento existente, confirmado con pruebas explícitas
+(`AlertAndComplaintEndpointTests`); no fue necesario corregir nada.
+
+## Asignación de técnico evaluador (RF-10)
+
+`Caso_Asignacion` (`CaseAssignment`) registra qué técnico evaluador tiene vigente cada expediente y
+conserva el historial completo de asignaciones y reasignaciones; nunca se borra una fila. Sigue el
+patrón `vigente` de `Establecimiento_Factor_Valor.vigente` (`CompanyRiskFactorValue.IsCurrent`) para
+distinguir la fila vigente de las históricas, pero además refuerza la invariante "una sola asignación
+vigente por caso" con un índice único filtrado en PostgreSQL,
+`IX_Caso_Asignacion_caso_id_vigente` (`UNIQUE (caso_id) WHERE vigente`) — el mismo mecanismo que ya
+usa `IX_Representante_Empresa_empresa_id_tipo_representante_vigente` para el representante activo de
+una empresa. Se eligió ese refuerzo adicional (que `CompanyRiskFactorValue` no tiene) porque aquí la
+unicidad es una regla de negocio explícita del RF-10 ("solo debe existir una asignación vigente por
+caso"), no solo una conveniencia de lectura.
+
+`POST /api/cases/{id}/assign` (roles: solo `COORDINADOR`) recibe `technicianId` y `reason`:
+
+- Valida que el técnico exista, tenga el rol `TECNICO_EVALUADOR` y esté activo
+  (`ApprovalStatus = Approved`); si no, responde `400`.
+- Si el caso está en `PENDING_ASSIGNMENT` (primera asignación), transiciona el caso a `ASSIGNED` con
+  `CaseStateMachine.CanTransition` y registra la fila correspondiente en `Caso_Estado_Historial`,
+  igual que hace `POST /api/cases/{id}/transition`.
+- Si el caso ya tiene una asignación vigente, es una reasignación: no cambia el estado del caso, solo
+  marca la asignación anterior como no vigente (`vigente = false`) y crea la nueva. **Decisión sobre
+  hasta qué estado se permite reasignar**: se acepta mientras el caso esté en `ASSIGNED`, `SCHEDULED`,
+  `IN_EVALUATION`, `PENDING_REPORT`, `IN_REVIEW` o `CORRECTION_REQUIRED` — es decir, mientras el
+  expediente sigue activo y el técnico todavía tiene trabajo pendiente sobre él o su informe puede
+  corregirse. A partir de `APPROVED` el informe ya quedó aprobado y reasignar el técnico no tiene
+  efecto útil; los estados terminales (`CLOSED`, `CANCELLED`) tampoco admiten reasignación. Un intento
+  fuera de esos estados responde `409`.
+- **Decisión sobre qué rol asigna**: aunque el grupo `/api/cases` ya admite `ADMINISTRADOR` o
+  `COORDINADOR` para sus demás operaciones, este endpoint agrega una segunda exigencia de rol que
+  restringe la asignación solo a `COORDINADOR` (decisión conservadora: el SRS atribuye la asignación
+  de evaluador específicamente al Coordinador, no al Administrador).
+
+`GET /api/cases/{id}/assignments` devuelve todas las filas (vigente e históricas) ordenadas de la más
+antigua a la más reciente, igual que `GET /api/cases/{id}/history`.
+
+**Dualidad endpoint/procedimiento (mismo criterio que `fn_perfil_usuario`)**: la migración
+`AddCaseAssignment` crea el procedimiento transaccional `sp_asignar_tecnico(caso_id, tecnico_id,
+usuario_id, motivo)`, que valida el técnico (rol y aprobación), marca la asignación anterior como no
+vigente, inserta la nueva y —si corresponde— transiciona el caso y registra su historial, todo en una
+sola transacción. El endpoint de la API **no** invoca este procedimiento directamente: reimplementa la
+misma regla en C# con `EbrDbContext`, porque las pruebas de integración corren sobre el proveedor en
+memoria, que no ejecuta procedimientos de PostgreSQL. `sp_asignar_tecnico` se verificó manualmente
+contra `ebr_bpm` real (primera asignación, reasignación, técnico inválido y estado terminal, cada caso
+dentro de una transacción con `ROLLBACK` para no dejar datos de prueba) y su comportamiento coincide
+con el del endpoint. Riesgo documentado: son dos implementaciones paralelas de la misma regla; si RF-10
+cambia, hay que actualizar ambas o dejarán de coincidir.
+
+## Programación y agenda de evaluaciones (RF-07, RF-11)
+
+`Caso_Programacion` (`CaseSchedule`) registra la agenda de un expediente: fecha/hora programada,
+prioridad, motivo, observaciones, quién programó y cuándo. Sigue el mismo patrón `vigente`
+(`IsCurrent`) que `Caso_Asignacion`: programar por primera vez o reprogramar crea una fila nueva y
+marca la anterior como histórica; ninguna fila se elimina. Un índice único filtrado
+`IX_Caso_Programacion_caso_id_vigente` (`UNIQUE (caso_id) WHERE vigente`) garantiza que un caso tenga
+como máximo una programación vigente, igual que hace `Caso_Asignacion` con la asignación de técnico.
+
+**Ventana de tiempo por evaluación (decisión documentada)**: el SRS no especifica cuánto dura una
+evaluación. Se fija una ventana de **2 horas por evaluación** (`CaseScheduleWindow.HoursPerEvaluation`
+en `EBR.Domain.Workflow`) como estimación operativa razonable de una visita de inspección BPM
+(recorrido del establecimiento y llenado de la ficha de 45 preguntas). Dos programaciones vigentes del
+mismo técnico se consideran solapadas si sus ventanas `[fecha_programada, fecha_programada + 2h)` se
+intersecan; la comparación toma el técnico de la fila (`Caso_Programacion.tecnico_id`), que se
+congela en el momento de programar/reprogramar a partir de la asignación vigente del caso
+(`Caso_Asignacion`) — así el solapamiento no cambia retroactivamente si el caso se reasigna después.
+
+**Cancelación (decisión de modelado)**: cancelar una programación **no** crea una fila nueva (no hay
+una fecha que la reemplace) ni transiciona el estado del caso — cancelar la fecha programada es una
+decisión distinta de cancelar el expediente completo, para lo cual ya existe
+`POST /api/cases/{id}/transition` hacia `CANCELLED`. En su lugar, la fila vigente se apaga
+(`vigente = false`) y se completan `fecha_cancelacion`, `cancelado_por` y `motivo_cancelacion` en esa
+misma fila, dejando constancia explícita de que fue cancelada (a diferencia de una fila que quedó
+histórica solo por haber sido reprogramada). Cancelar sin programación vigente responde `409` (no se
+permite doble cancelación).
+
+Endpoints (roles: solo `COORDINADOR`, mismo criterio que `POST /api/cases/{id}/assign`):
+
+- `POST /api/cases/{id}/schedule` — programa por primera vez. Exige una asignación de técnico vigente
+  (si no hay, `400`), transiciona `ASSIGNED -> SCHEDULED` con `CaseStateMachine.CanTransition` (si el
+  caso no está en un estado desde el que se permita esa transición, `409`) y valida el solapamiento
+  del técnico (`409` si se solapa con otra programación vigente suya).
+- `POST /api/cases/{id}/reschedule` — reprograma: marca la fila vigente anterior como histórica y crea
+  la nueva, sin cambiar el estado del caso. **Decisión sobre hasta qué estado se permite reprogramar**:
+  se reutiliza el mismo criterio y la misma lista de estados que `CaseStateMachine.CanReassign` usa
+  para la reasignación de técnico (`ASSIGNED`, `SCHEDULED`, `IN_EVALUATION`, `PENDING_REPORT`,
+  `IN_REVIEW`, `CORRECTION_REQUIRED`); en la práctica, si el caso nunca se programó (por ejemplo sigue
+  en `ASSIGNED`), no existe una fila vigente que reprogramar y el endpoint responde `409` igual que si
+  el estado no lo permitiera. Vuelve a validar el solapamiento del técnico contra la nueva fecha.
+- `POST /api/cases/{id}/cancel-schedule` — cancela la programación vigente (ver modelado arriba). No
+  usa el endpoint genérico `POST /api/cases/{id}/transition` porque cancelar una fecha no es un cambio
+  de estado del caso.
+- `GET /api/cases/{id}/schedules` devuelve todas las filas (vigente e históricas) de un caso, ordenadas
+  de la más antigua a la más reciente, igual que `GET /api/cases/{id}/assignments`.
+- `GET /api/cases/schedule?from=&to=` — agenda en un rango de fechas (alcanza para vistas de día,
+  semana o mes según el rango que envíe el cliente, RF-11): devuelve, por cada programación vigente en
+  el rango, el caso, la empresa (`razon_social`), la dirección (`direccion`), la fecha programada, el
+  estado del caso y la prioridad. Hereda la autorización del grupo `/api/cases`
+  (`ADMINISTRADOR`/`COORDINADOR`); no expone todavía una vista acotada al propio técnico
+  (`/api/technicians/{id}/calendar`), porque el grupo `/api/cases` ya restringe todo el módulo a esos
+  dos roles y el Técnico Evaluador no tiene hoy acceso a ningún endpoint de `/api/cases` — limitación
+  preexistente que no correspondía resolver en esta tarea.
+
+**Prioridad del caso**: `Caso.prioridad` se actualiza con la prioridad enviada en `schedule`/
+`reschedule` cuando viene informada (si no, se conserva la que ya tenía). No hay un catálogo cerrado de
+prioridades (igual que en el resto del módulo de casos): se guarda como texto libre normalizado a
+mayúsculas.
+
+**Dualidad endpoint/procedimiento (mismo criterio que `sp_asignar_tecnico`)**: la migración
+`AddCaseSchedule` crea el procedimiento transaccional `sp_programar_evaluacion(caso_id, accion,
+fecha_programada, prioridad, motivo, observaciones, usuario_id)`, con `accion` en
+`PROGRAMAR`/`REPROGRAMAR`/`CANCELAR`, que aplica las mismas reglas de estado, solapamiento y
+cancelación en una sola transacción. El endpoint de la API tampoco invoca este procedimiento
+directamente (mismo motivo: las pruebas de integración corren en el proveedor en memoria) y
+reimplementa la regla en C#. Se verificó manualmente contra `ebr_bpm` real: programar, intento de
+programación solapada (rechazado), programación en horario libre, intento de reprogramación hacia un
+horario solapado (rechazado), reprogramación válida (conserva 2 filas, 1 vigente, estado sin cambios),
+cancelación y doble cancelación (rechazada) — todo dentro de una transacción con `ROLLBACK` para no
+dejar datos de prueba.
+
+**Límite conocido de la validación de solapamiento**: tanto el endpoint en C# como
+`sp_programar_evaluacion` validan el solapamiento con un `SELECT` seguido de un `INSERT`/`UPDATE`
+dentro de la misma transacción (el procedimiento además toma `FOR UPDATE` sobre la fila de `Caso`), lo
+que evita colisiones dentro de esa misma llamada, pero no existe una restricción declarativa a nivel de
+PostgreSQL (por ejemplo un `EXCLUDE USING gist` sobre un rango de tiempo con `btree_gist`) que impida un
+solapamiento si dos llamadas concurrentes para el mismo técnico pero **distintos casos** se ejecutan en
+paralelo sin pasar por el mismo procedimiento. Queda documentado como limitación conocida en lugar de
+inventar una garantía que no está implementada; una mejora futura razonable sería agregar ese `EXCLUDE`
+constraint sobre `(tecnico_id, tsrange(fecha_programada, fecha_programada + interval '2 hours')) WHERE
+vigente`.
+
+## Ejecución de la evaluación y respuestas (RF-12, RF-13)
+
+`Evaluacion_Instancia` (`EvaluationInstance`) es la ejecución concreta de la ficha BPM sobre un
+expediente: liga `caso_id` con `plantilla_id`, la plantilla **activa** en el momento de iniciarse
+(ver más abajo). `plantilla_id` se congela al crear la instancia — publicar u activar una versión
+posterior de la familia no afecta evaluaciones ya iniciadas o enviadas, porque la instancia no sigue
+la familia (`familia_id`), sigue la versión concreta. Un índice único real
+`IX_Evaluacion_Instancia_caso_id` (`UNIQUE (caso_id)`) garantiza como máximo una instancia por caso;
+en la práctica nunca hace falta una segunda, porque el flujo del caso no permite volver a
+`SCHEDULED` (estado del que se inicia una evaluación) después de avanzar más allá de
+`IN_EVALUATION`.
+
+### Plantilla activa (`Plantilla_Activa`)
+
+**Criterio de selección de plantilla (decisión documentada, el SRS no lo especifica)**: el modelo
+actual no asocia una empresa o un caso a una familia de plantilla concreta, así que
+`POST /api/cases/{id}/evaluations` necesita un criterio explícito para elegir entre varias
+plantillas publicadas simultáneamente. **Hasta esta corrección** el criterio era "la publicada más
+recientemente" (por `fecha_publicacion` y, en empate, por identificador descendente); resultó
+inseguro en la práctica: cualquier plantilla de prueba publicada después de la ficha oficial pasaba
+a ser, sin ninguna acción explícita, la que usaban las evaluaciones nuevas. `Plantilla_Activa` es
+una tabla de una sola fila (`CK_Plantilla_Activa_Singleton`, `"Id" = 1`) que declara explícitamente
+cuál plantilla usa `StartAsync`:
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `Id` | `integer` | Siempre `1`; `CK_Plantilla_Activa_Singleton` impide una segunda fila. |
+| `plantilla_id` | `integer` | FK a `Plantilla_Evaluacion`, `ON DELETE RESTRICT`. |
+| `fecha_activacion` | `timestamptz` | Cuándo se activó. |
+| `activado_por` | `uuid`, nullable | Quién la activó; nulo cuando la fila la sembró la migración de datos (activación automática de la ficha oficial al desplegar, no un acto de un usuario). |
+
+Deliberadamente **no** está sujeta al disparador `tr_plantilla_publicada_inmutable`: activar una
+plantilla debe poder cambiar aunque la plantilla en cuestión ya esté `PUBLISHED` (de hecho solo
+plantillas publicadas pueden activarse), sin que eso viole la inmutabilidad de su contenido.
+
+`POST /api/evaluation-templates/{id}/activate` (rol `ADMINISTRADOR`) marca una plantilla como
+activa, reemplazando la anterior. Rechaza con `409` si:
+
+- La plantilla no está `PUBLISHED`.
+- El número de `Plantilla_Evaluacion_Regla` de la plantilla no coincide exactamente con el número
+  de opciones del factor estructural `BPM` de la versión de reglas de riesgo publicada vigente (ver
+  más abajo) — activar una plantilla que no cumple ese contrato dejaría sin calificación posible
+  cualquier evaluación que se envíe mientras esté activa.
+
+`GET /api/evaluation-templates/active` devuelve `{ templateId, activatedAt }` (`templateId: null` si
+nunca se ha activado ninguna).
+
+`POST /api/cases/{id}/evaluations` (`EvaluationInstanceEndpoints.StartAsync`) consulta
+`Plantilla_Activa` en vez de `fecha_publicacion`; si no hay ninguna fila, o la plantilla que apunta
+ya no está `PUBLISHED` (no debería ocurrir porque es inmutable, pero se valida igual), responde
+`409` con un mensaje explícito. **Contra PostgreSQL real la resolución ocurre dos veces, por el
+mismo patrón de "dos implementaciones paralelas" que documentan `fn_perfil_usuario` y
+`sp_asignar_tecnico`**: el endpoint la resuelve para congelar el resultado en la respuesta HTTP, y el
+procedimiento `sp_iniciar_evaluacion` —quien de verdad hace el `INSERT` en modo Postgres— la vuelve
+a resolver internamente desde `Plantilla_Activa` para no depender de que el llamador se la pase.
+Antes del arreglo, `sp_iniciar_evaluacion` tenía su propia copia del criterio roto
+(`ORDER BY fecha_publicacion DESC`), así que corregir solo el endpoint no bastaba: contra Postgres
+real el procedimiento seguía eligiendo la plantilla equivocada. Ambas implementaciones se
+verificaron manualmente y coinciden.
+
+**Migración de datos**: `AddActiveEvaluationTemplate` crea la tabla y activa la ficha oficial real
+resolviendo su id dinámicamente (`SELECT "Id" FROM "Plantilla_Evaluacion" WHERE nombre =
+'Ficha de Inspección BPM' AND estado = 'PUBLISHED' ORDER BY version DESC LIMIT 1`), nunca con un id
+fijo. Si esa fila no existe todavía (por ejemplo, un despliegue nuevo que aplica las migraciones
+antes de importar la ficha), la migración no inserta nada: `Plantilla_Activa` queda vacía y
+`StartAsync` responde `409` hasta que un administrador active una plantilla — comportamiento
+correcto, no un error de la migración. `FixStartEvaluationUsesActiveTemplate` redefine
+`sp_iniciar_evaluacion` para que use `Plantilla_Activa` en vez de `fecha_publicacion`.
+
+`POST /api/cases/{id}/evaluations` (rol `TECNICO_EVALUADOR`, no `ADMINISTRADOR`/`COORDINADOR` —
+ver más abajo):
+
+- Exige que quien llama sea el técnico con asignación **vigente** del caso
+  (`Caso_Asignacion.vigente`); si no coincide, responde `403`. Si el caso no tiene asignación
+  vigente, `400`.
+- Exige que la máquina de estados permita transicionar el caso a `IN_EVALUATION` (en la práctica,
+  el caso debe estar `SCHEDULED`); si no, `409`. Registra la transición en
+  `Caso_Estado_Historial` igual que el resto de endpoints de `/api/cases`.
+- Si el caso ya tiene una instancia (columna única `caso_id`), responde `409` en lugar de dejar que
+  la restricción de base de datos lance una excepción no controlada.
+
+`Evaluacion_Respuesta` (`EvaluationResponse`) es una fila por pregunta respondida: `instancia_id`,
+`item_id` (debe ser un `Plantilla_Evaluacion_Item` activo de tipo `QUESTION` de la plantilla de la
+instancia), `opcion` (`C`/`CP`/`IT`/`NA`, con `CK_Evaluacion_Respuesta_Opcion`), `observaciones`,
+`comentarios`, `fecha_guardado` y `guardado_por`. **Autosave idempotente**: guardar la misma
+pregunta más de una vez actualiza la fila existente; el índice único real
+`IX_Evaluacion_Respuesta_instancia_id_item_id` (`UNIQUE (instancia_id, item_id)`) lo garantiza a
+nivel de base de datos, no solo en la aplicación.
+
+`PUT /api/evaluations/{id}/responses/{itemId}` (rol `TECNICO_EVALUADOR`):
+
+- Rechaza con `409` si la instancia ya está `SUBMITTED` (bloqueada).
+- Valida contra la asignación **vigente actual** del caso, no contra el técnico que inició la
+  instancia: si el caso se reasigna mientras está `IN_EVALUATION` (permitido por
+  `CaseStateMachine.CanReassign`, ver sección de asignación de técnico), el nuevo técnico puede
+  continuar capturando respuestas sin que quede huérfana la instancia. Rechaza con `403` si quien
+  llama no es el técnico vigente.
+- Valida que la opción exista entre las declaradas para esa plantilla en
+  `Plantilla_Evaluacion_Opcion` (no contra un catálogo genérico), y que `NA` solo se use si el ítem
+  tiene `permite_no_aplica`.
+
+`GET /api/evaluations/{id}` devuelve la instancia con el **progreso de captura**: cuántas preguntas
+activas (`tipo_item = 'QUESTION'`) tiene la plantilla congelada de la instancia
+(`TotalQuestions`), cuántas ya tienen una fila en `Evaluacion_Respuesta` (`AnsweredQuestions`,
+cuenta toda pregunta con respuesta guardada, **incluida `NA`**) y el porcentaje resultante
+(`ProgressPercentage`, `NULL` si la plantilla no tiene preguntas). **Esto es distinto del porcentaje
+BPM** que calcula `BpmScoreCalculator`: el porcentaje BPM pondera por peso y excluye `NA` del
+denominador (mide cumplimiento), mientras que el progreso de captura solo mide cuánto del
+formulario ya se llenó, sin ponderar ni excluir `NA`. Son dos métricas independientes que no deben
+confundirse ni sumarse; la tarea de cálculo BPM e integración de riesgo reutiliza
+`Evaluacion_Respuesta` (unida con `Plantilla_Evaluacion_Item` para obtener código y peso) para
+construir los `BpmAnswer` que consume `BpmScoreCalculator.Calculate`.
+
+`POST /api/evaluations/{id}/submit` (rol `TECNICO_EVALUADOR`) bloquea la instancia (`SUBMITTED`,
+`fecha_envio`, `enviado_por`) y transiciona el caso a `PENDING_REPORT` con
+`CaseStateMachine.CanTransition`, registrando `Caso_Estado_Historial`. Valida la misma asignación
+vigente que el autosave y rechaza con `409` un segundo envío. **Decisión conservadora sobre
+completitud**: no exige que el 100% de las preguntas obligatorias estén respondidas antes de
+permitir el envío. El SRS establece que las respuestas quedan bloqueadas después de enviar, pero no
+que el envío exija completitud; inventar esa regla podría bloquear envíos legítimos (por ejemplo,
+fichas con secciones mayoritariamente `NA` para un establecimiento concreto) sobre una base no
+especificada. El progreso de captura (`GET /api/evaluations/{id}`) ya le permite al técnico decidir
+con criterio antes de enviar.
+
+**Rol exclusivo del Técnico Evaluador**: a diferencia del resto de `/api/cases`
+(`ADMINISTRADOR`/`COORDINADOR`), las cuatro rutas de esta sección autorizan solo
+`TECNICO_EVALUADOR` — quien ejecuta la ficha en campo es el técnico. Esto significa que hoy
+`ADMINISTRADOR`/`COORDINADOR` no tienen una vista de solo lectura del progreso de una evaluación en
+curso; se documenta como alcance deliberado de esta tarea, no como una omisión, y queda como mejora
+futura razonable si se necesita supervisión en tiempo real.
+
+**Evaluación enviada = inmutable** (mismo criterio ya declarado en "Criterios de diseño"): una vez
+`SUBMITTED`, ni la cabecera de `Evaluacion_Instancia` ni sus filas de `Evaluacion_Respuesta` admiten
+modificación. La invariante está duplicada: en la aplicación (`EbrDbContext.SaveChanges`, antes de
+llegar a la base) y en PostgreSQL con el disparador `tr_evaluacion_respuesta_bloqueada` sobre
+`Evaluacion_Respuesta`, que consulta el estado de la instancia relacionada y rechaza
+`INSERT`/`UPDATE`/`DELETE` si ya está `SUBMITTED`.
+
+**Dualidad endpoint/procedimiento (mismo criterio que `sp_asignar_tecnico`/`sp_programar_evaluacion`)**:
+la migración `AddEvaluationInstanceAndResponses` crea `sp_guardar_respuestas(instancia_id, item_id,
+opcion, observaciones, comentarios, usuario_id)` (autosave con `INSERT ... ON CONFLICT (instancia_id,
+item_id) DO UPDATE`, validando instancia no enviada, ítem pregunta activa de la plantilla, opción
+declarada para la plantilla y `NA` solo si el ítem lo permite) y `sp_enviar_evaluacion(instancia_id,
+usuario_id)` (bloquea la instancia y transiciona el caso en una sola transacción). Ninguno de los dos
+crea la instancia: iniciar la evaluación no tiene procedimiento propio en este esquema porque no
+introduce una invariante transaccional adicional sobre la que ya cubre el índice único
+`caso_id` — mismo criterio que `AddRegistrationAndBpmRequestDocuments`, que tampoco agregó
+procedimientos para una validación de presencia simple. El endpoint de la API no invoca
+`sp_guardar_respuestas` ni `sp_enviar_evaluacion` directamente (mismo motivo que el resto del
+módulo: las pruebas de integración corren sobre el proveedor en memoria, que no ejecuta
+procedimientos de PostgreSQL) y reimplementa la misma regla en C#. Se verificó manualmente contra
+`ebr_bpm` real, dentro de una transacción con `ROLLBACK` (usando `SAVEPOINT` para recuperar cada
+caso de rechazo esperado sin abortar la transacción completa): autosave con guardado repetido sobre
+la misma pregunta (una sola fila, valor actualizado), opción inexistente rechazada, envío exitoso con
+transición del caso e historial, doble envío rechazado, guardado tras envío rechazado por el
+procedimiento, y modificación directa de una respuesta tras envío rechazada por
+`tr_evaluacion_respuesta_bloqueada` — todo sin dejar datos de prueba persistidos.
+
+## Resultado de la evaluación y riesgo integrado (RF-14)
+
+`Evaluacion_Resultado` (`EvaluationResult`) es la fotografía del cálculo que produce el envío de una
+evaluación: se escribe una sola vez, dentro del envío, y no vuelve a tocarse. Guarda los puntos
+obtenidos, el denominador, el porcentaje BPM, el código y la clasificación de la banda de
+calificación de la ficha, el puntaje del factor de riesgo BPM resultante, el conteo de no
+conformidades por severidad, el identificador del `Calculo_Riesgo` asociado y la frecuencia de
+inspección en meses. `Evaluacion_No_Conformidad` guarda una fila por criterio de guía incumplido,
+ligada a la respuesta que la originó y al criterio, con su severidad.
+
+**Por qué es una fotografía y no un cálculo en vivo**: el porcentaje BPM depende de la plantilla
+congelada en la instancia y el nivel de riesgo depende de la versión de reglas congelada en la
+instancia (`Evaluacion_Instancia.version_regla_riesgo_id`, fijada al iniciar). Publicar después otra
+versión de reglas o de la ficha no altera un resultado ya registrado. La invariante está duplicada,
+igual que en `Calculo_Riesgo`: en la aplicación y en PostgreSQL con el disparador
+`tr_evaluacion_resultado_inmutable`, que rechaza `UPDATE` y `DELETE` sobre `Evaluacion_Resultado` y
+sobre `Evaluacion_No_Conformidad`.
+
+El porcentaje BPM lo calcula `BpmScoreCalculator` sobre las respuestas: pondera cada pregunta por su
+peso y **excluye del denominador las preguntas marcadas `NA`**, de modo que un establecimiento no se
+penaliza por secciones que no le aplican. Las no conformidades se derivan de la criticidad declarada
+en `Plantilla_Evaluacion_Criterio`, no de una tabla aparte de severidades.
+
+**Correspondencia entre la calificación BPM y el factor de riesgo (decisión de modelado)**: la banda
+de calificación de la ficha se traduce a una opción del factor `BPM` de la versión de reglas
+congelada **por posición ordinal**, no reinterpretando porcentajes. Las dos fuentes normativas
+describen el mismo eje (de peor a mejor cumplimiento) con la misma cantidad de escalones, pero con
+umbrales redactados de forma distinta; alinearlos por número sería inventar una equivalencia que
+ninguna de las dos fuentes declara. Si el número de escalones no coincide, el envío se rechaza con un
+mensaje explícito en lugar de aproximar. El resto de factores del establecimiento se toman de los
+valores vigentes de la empresa; si a la empresa le falta alguno, el envío se rechaza.
+
+`GET /api/evaluations/{id}/result` devuelve el resultado con su desglose y las no conformidades.
+Responde `404` mientras la evaluación siga en `IN_PROGRESS`, porque hasta el envío no hay resultado.
+A diferencia de las rutas de captura, esta la consultan también `COORDINADOR` y `ADMINISTRADOR`, que
+son quienes dan seguimiento al expediente; el técnico solo ve el resultado de los casos que tiene
+asignados.
+
+**Deuda saldada — altas de catálogo sin versión de reglas**: `/api/catalogs` creaba peligros,
+factores y bandas sin `version_regla_id`, lo que obligaba al motor a una ruta de cálculo alterna
+sobre `puntaje_total`. Ahora `RiskRuleVersionProvisioner` decide el destino de cada alta: los
+peligros de subcategoría y las bandas de frecuencia entran en la versión publicada vigente —si no
+entraran, el alimento o el intervalo recién dados de alta quedarían invisibles para el cálculo—,
+mientras que un factor nuevo entra en el borrador en curso, porque una versión publicada exige el
+juego completo de factores con pesos que sumen exactamente `1` y añadirle un factor suelto la dejaría
+inconsistente. Con eso la ruta heredada sobre `puntaje_total` se eliminó: el motor solo calcula
+contra una versión publicada y vigente, y `puntaje_total` queda únicamente como dato histórico.
+
+## Evidencias de la evaluación en campo
+
+`Evaluacion_Evidencia` guarda **solo metadatos**: `nombre_archivo`, `tipo_mime`, `tamano_bytes`,
+`hash`, `clave_objeto`, `descripcion`, `fecha_carga` y `cargado_por`. El binario nunca entra en
+PostgreSQL; vive en el almacenamiento de objetos y la fila lo referencia por `clave_objeto`, que es
+única para que dos evidencias no puedan apuntar al mismo objeto. Cada evidencia pertenece a una
+`Evaluacion_Instancia` y, opcionalmente, a una `Evaluacion_Respuesta` concreta: una fotografía de un
+hallazgo se ancla a la pregunta que la sustenta, mientras que un documento general del recorrido se
+adjunta a la instancia con `respuesta_id` nulo.
+
+El `hash` es SHA-256 en hexadecimal minúsculo y lo calcula el servidor sobre los bytes recibidos,
+nunca el cliente: es lo que permite comprobar más tarde que el objeto descargado es el mismo que se
+subió. La restricción `CK_Evaluacion_Evidencia_Hash` exige exactamente 64 caracteres,
+`CK_Evaluacion_Evidencia_Tipo` limita `tipo_mime` a `image/jpeg`, `image/png`, `image/webp` y
+`application/pdf`, y `CK_Evaluacion_Evidencia_Tamano` acota el tamaño a un máximo de 15 MB
+(`15728640` bytes) y prohíbe el archivo vacío. Las tres reglas viven también en el endpoint, porque
+las pruebas de integración corren sobre el proveedor en memoria, que no evalúa restricciones de
+comprobación.
+
+Disparadores:
+
+- `tr_evaluacion_evidencia_valida` (BEFORE INSERT) rechaza adjuntar a una instancia inexistente o ya
+  enviada, y exige que la respuesta referenciada pertenezca a la misma instancia.
+- `tr_evaluacion_evidencia_inmutable` (BEFORE UPDATE OR DELETE) rechaza cualquier cambio: alterar el
+  hash o la clave rompería la correspondencia con el binario. Una evidencia equivocada se aclara en
+  la evaluación, no se borra.
+
+Rutas y roles:
+
+| Ruta | Método | Rol |
+|---|---|---|
+| `/api/evaluations/{id}/evidence` | POST | Técnico evaluador asignado, con la evaluación abierta |
+| `/api/evaluations/{id}/evidence` | GET | Técnico asignado, coordinador y administrador |
+| `/api/evaluations/{id}/evidence/{evidenciaId}/content` | GET | Técnico asignado, coordinador y administrador |
+
+Un técnico sin la asignación vigente del expediente recibe `403` tanto al adjuntar como al consultar,
+y las cuentas de empresa no tienen acceso a estas rutas. Adjuntar sobre una evaluación ya enviada
+devuelve `409`.
+
+El binario se guarda mediante la abstracción `IEvidenceStorage`, con dos implementaciones elegidas
+por configuración: MinIO local cuando `Minio__Endpoint` tiene valor y el sistema de archivos
+(`storage/evidencias`) cuando está vacío. La clave del objeto es
+`evaluaciones/{instancia}/{identificador}{extensión}`, generada por el servidor, de modo que el
+nombre original del archivo nunca determina la ruta de escritura.
+
+## Informe de la evaluación (RF-16)
+
+`Evaluacion_Informe` guarda el texto del informe —`resumen_ejecutivo`, `hallazgos` y
+`recomendaciones`— junto a `instancia_id`, `version`, `estado`, `fecha_emision` y `emitido_por`. Las
+cifras del BPM (porcentaje, calificación, no conformidades) **no se copian aquí**: viven en
+`Evaluacion_Resultado`, que ya es inmutable, así que cada lectura del informe las reproduce desde su
+única fuente y no pueden divergir.
+
+El informe se versiona. Emitirlo de nuevo tras una corrección inserta la versión siguiente y
+conserva intactas las anteriores, porque el informe es lo que se comunica al establecimiento y una
+corrección no puede borrar lo ya emitido. El índice único sobre `(instancia_id, version)` impide
+duplicar una versión, y `tr_evaluacion_informe_valido` exige que la versión insertada sea
+exactamente la última más uno, de modo que el historial no tenga huecos aunque la fila se inserte
+directamente por SQL.
+
+Disparadores:
+
+- `tr_evaluacion_informe_valido` (BEFORE INSERT) rechaza emitir sobre una instancia inexistente o que
+  todavía no está en `SUBMITTED`, y exige la versión consecutiva.
+- `tr_evaluacion_informe_inmutable` (BEFORE UPDATE OR DELETE) rechaza eliminar una versión y rechaza
+  cambiar su contenido, la instancia, la versión, la fecha o el autor. `estado` queda fuera del
+  bloqueo porque el recorrido de revisión del informe avanza sobre la misma fila.
+
+Rutas y roles:
+
+| Ruta | Método | Rol |
+|---|---|---|
+| `/api/evaluations/{id}/report` | POST | Técnico evaluador con la asignación vigente, con la evaluación ya enviada |
+| `/api/evaluations/{id}/report` | GET | Técnico asignado, coordinador y administrador |
+| `/api/evaluations/{id}/report/versions` | GET | Técnico asignado, coordinador y administrador |
+
+`GET /api/evaluations/{id}/report` devuelve la versión vigente, que es siempre la última emitida, y
+`404` mientras no exista ninguna. Emitir sobre una evaluación aún en captura devuelve `409` y hacerlo
+sin la asignación vigente devuelve `403`. Para leer basta haber tenido el expediente asignado alguna
+vez: un técnico reasignado conserva el acceso a lo que él mismo emitió, mientras que un técnico ajeno
+al expediente recibe `403`. Las cuentas de empresa no tienen acceso a estas rutas.
+
+## Revisión del informe y correcciones (RF-17 y RF-18)
+
+`Evaluacion_Informe_Revision` guarda una fila por decisión del coordinador sobre una versión concreta
+del informe: `informe_id`, `decision`, `observaciones`, `fecha_revision` y `revisado_por`. Ninguna
+fila se reemplaza, porque las observaciones son lo que el técnico consulta para corregir y forman
+parte del expediente igual que el informe.
+
+El SRS enumera tres acciones de revisión —aprobar, devolver y solicitar corrección— sin definir en
+qué se diferencian las dos últimas. No se inventa una distinción: se conservan como decisiones
+distintas (`APPROVED`, `RETURNED`, `CORRECTION_REQUESTED`) para registrar la intención del
+coordinador, y tanto `RETURNED` como `CORRECTION_REQUESTED` dejan el expediente en
+`CORRECTION_REQUIRED`, que es el único estado que la máquina contempla para la devolución. El estado
+del informe es la última decisión tomada sobre él; mientras no se revise, es `ISSUED`.
+
+El recorrido sobre el expediente queda así:
+
+| Momento | Estado del expediente |
+|---|---|
+| Envío de la evaluación | `PENDING_REPORT` |
+| Emisión del informe | `IN_REVIEW` |
+| Emisión de otra versión antes de la revisión | sigue `IN_REVIEW` |
+| Devolución o solicitud de corrección | `CORRECTION_REQUIRED` |
+| Reenvío del informe corregido | `IN_REVIEW` |
+| Aprobación | `APPROVED` |
+
+Cada cambio deja su fila en `Caso_Estado_Historial`. Un expediente aprobado o cerrado ya no admite
+versión nueva del informe (`409`), y un informe aprobado no se vuelve a revisar (`409`): lo aprobado
+es lo que se comunicó al establecimiento. Devolver sin observaciones se rechaza con `400`, porque la
+devolución sin indicar qué corregir deja al técnico sin nada que hacer, y una decisión fuera del
+catálogo también se rechaza con `400`.
+
+La restricción de RF-17 —los datos de la evaluación quedan bloqueados después de enviada— es la que
+ya aplica el envío: `Evaluacion_Respuesta` no admite altas ni cambios sobre una instancia enviada, en
+el endpoint y en la base (`tr_evaluacion_respuesta_bloqueada`), y el resultado registrado es
+inmutable. Una corrección, por tanto, corrige el informe, nunca las respuestas de campo.
+
+Disparadores:
+
+- `tr_evaluacion_informe_revision_valida` (BEFORE INSERT) exige que el informe exista, rechaza revisar
+  una versión que no sea la última emitida y exige observaciones cuando la decisión devuelve el
+  informe. El catálogo de decisiones lo impone la restricción
+  `CK_Evaluacion_Informe_Revision_Decision`.
+- `tr_evaluacion_informe_revision_inmutable` (BEFORE UPDATE OR DELETE) rechaza cualquier cambio: la
+  observación que motivó una corrección no se reescribe después.
+
+Rutas y roles:
+
+| Ruta | Método | Rol |
+|---|---|---|
+| `/api/evaluations/{id}/report/review` | POST | Coordinador |
+| `/api/evaluations/{id}/report/reviews` | GET | Técnico asignado, coordinador y administrador |
+
+## Informe oficial en PDF y cierre del expediente (RF-19)
+
+`Evaluacion_Informe_Oficial` guarda los metadatos inmutables del PDF oficial de una versión aprobada
+del informe: `informe_id` (único, una emisión oficial por versión), `nombre_archivo`, `tipo_mime`,
+`tamano_bytes`, `hash_sha256`, `clave_objeto` (único), `fecha_generacion` y `generado_por`. El binario
+del PDF vive en el almacenamiento de objetos (`IEvidenceStorage`, sistema de archivos local o MinIO);
+la base solo conserva la referencia y el hash.
+
+El PDF se compone con QuestPDF (licencia Community, fijada al arranque en
+`AddInfrastructure` y en el constructor estático de `OfficialReportRenderer`). El paquete se añadió a
+`EBR.Infrastructure`; el contrato `IOfficialReportRenderer` vive en `EBR.Application`. El documento se
+arma **solo con datos ya persistidos e inmutables** —el texto de la versión aprobada del informe, la
+fotografía de `Evaluacion_Resultado` (cumplimiento BPM, calificación, puntaje de riesgo, frecuencia y
+conteo de no conformidades por severidad), el detalle de `Evaluacion_No_Conformidad` con el código y
+la descripción de su criterio de guía, y las referencias de `Evaluacion_Evidencia` (nombre, tamaño y
+hash SHA-256)—; el renderizador no calcula nada.
+
+La generación es determinista: los metadatos de fecha del documento se fijan a la fecha de emisión del
+informe, no a la de generación, así que dos emisiones del mismo informe producen bytes idénticos. La
+segunda solicitud de generación devuelve el metadato ya registrado en lugar de rehacer el archivo
+(`200` en vez de `201`). El pie del PDF incrusta además un hash de contenido (SHA-256 sobre la
+serialización canónica de los datos, sin la fecha de generación) que no cambia entre emisiones.
+
+`Caso_Cierre` es el acta inmutable del cierre: `caso_id` (único), `informe_id`, `informe_oficial_id`,
+`estado` (siempre `CLOSED`), `resultado`, `fecha_cierre` y `cerrado_por`. El cierre lo ejecuta
+`sp_cerrar_expediente`, que bloquea el expediente (`FOR UPDATE`), es idempotente (si ya hay acta,
+retorna sin error) y exige estado `APPROVED`, última versión del informe en `APPROVED` y PDF oficial
+asociado; deja el expediente en `CLOSED` y registra la transición en `Caso_Estado_Historial`. Un
+expediente cerrado es terminal: la máquina de estados no admite salir de `CLOSED`, no acepta versión
+nueva del informe (`409`) ni nueva revisión (`409`).
+
+Disparadores:
+
+- `tr_informe_oficial_inmutable` (BEFORE UPDATE OR DELETE sobre `Evaluacion_Informe_Oficial`) y
+  `tr_caso_cierre_inmutable` (BEFORE UPDATE OR DELETE sobre `Caso_Cierre`) rechazan cualquier cambio
+  sobre el registro oficial y el acta de cierre una vez creados, mediante
+  `fn_registro_cierre_inmutable()`.
+
+Rutas y roles:
+
+| Ruta | Método | Rol |
+|---|---|---|
+| `/api/evaluations/{id}/report/official` | POST | Coordinador |
+| `/api/evaluations/{id}/report/official/content` | GET | Técnico asignado, coordinador y administrador |
+| `/api/cases/{id}/close` | POST | Coordinador |
+
+## Consultas operativas e historial (RF-20)
+
+`GET /api/cases/history/search` (roles `COORDINADOR` y `ADMINISTRADOR`) devuelve las transiciones de
+estado de los expedientes (`Caso_Estado_Historial`) filtradas por empresa, técnico, estado, origen y
+rango de fechas, paginadas. Además de la transición, cada fila del resultado incluye —cuando existen—
+los dos bloques que pide RF-20, obtenidos por lectura sobre tablas que ya son inmutables por
+disparador, sin recalcular nada:
+
+- **Informe**: si el expediente tiene un informe oficial emitido (`Evaluacion_Informe_Oficial` a
+  través de `Evaluacion_Instancia` → `Evaluacion_Informe`), se devuelve `hasOfficialReport`, la fecha
+  de generación, el hash SHA-256, el nombre de archivo y el tamaño. Si hay más de una emisión oficial
+  se toma la más reciente por `fecha_generacion`.
+- **Calificación**: si existe `Evaluacion_Resultado` para la instancia del expediente, se devuelve el
+  porcentaje BPM, el código y la clasificación de la banda de la ficha, el puntaje del factor de
+  riesgo BPM, la frecuencia de inspección en meses y el nivel de riesgo (`Nivel_Riesgo.nombre` del
+  `Calculo_Riesgo` asociado al resultado).
+
+La consulta histórica en sí no agregó tabla: `HistoryAsync` (en `OperationalReadEndpoints.cs`)
+resuelve estos datos con consultas de lectura sobre `Evaluacion_Instancia`, `Evaluacion_Resultado`,
+`Calculo_Riesgo`, `Nivel_Riesgo`, `Evaluacion_Informe` y `Evaluacion_Informe_Oficial`.
+
+### Notificaciones
+
+La migración `AddOperationalReadsAndNotifications` incorpora la tabla `Notificacion`:
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | `integer` identidad | Clave primaria. |
+| `destinatario_id` | `uuid` | FK a `AspNetUsers`; el usuario que recibe la notificación. |
+| `tipo` | `varchar(60)` | Código del evento que la origina. |
+| `titulo` | `varchar(160)` | Texto corto para la lista. |
+| `mensaje` | `text` | Detalle. |
+| `tipo_referencia` / `referencia_id` | `varchar(40)` / `integer` | Enlace opcional a la entidad relacionada (por ejemplo, un expediente). |
+| `operacion_id` | `varchar(180)` | Clave de idempotencia: evita duplicar la misma notificación ante reintentos. |
+| `fecha_creacion` | `timestamptz` | Alta. |
+| `fecha_lectura` | `timestamptz` nullable | `NULL` mientras no se lee; se fija con `PATCH /api/notifications/{id}/read`. |
+
+Índices: `(destinatario_id, fecha_creacion)` para la bandeja del usuario y `operacion_id` para la
+resolución idempotente. El estado de lectura vive solo en la base; la interfaz lo refleja y no lo
+almacena. No requiere rutinas: el alta y el marcado se resuelven con consultas simples en
+`OperationalReadEndpoints.cs`.
 
 ## Riesgo y frecuencia
 
@@ -288,12 +968,35 @@ Procedimientos transaccionales:
   factores activos con pesos que sumen `1`; calcula `RT` redondeado a tres decimales; localiza la
   banda de frecuencia de esa versión e inserta el cálculo con su snapshot en una sola transacción.
   Rechaza un riesgo de producto nulo o no positivo, es decir, un producto sin peligro conocido.
-- `sp_asignar_tecnico(caso_id, tecnico_id, usuario_id, motivo)` conserva el historial.
-- `sp_programar_evaluacion(...)` crea, reprograma o cancela sin perder historial.
-- `sp_guardar_respuestas(...)` aplica control de versión e idempotencia.
-- `sp_enviar_evaluacion(...)` calcula y bloquea la evaluación.
-- `sp_revisar_informe(...)` registra aprobación, devolución o corrección.
-- `sp_cerrar_expediente(...)` comprueba el informe oficial y cierra de forma inmutable.
+- `sp_asignar_tecnico(caso_id, tecnico_id, usuario_id, motivo)` valida que el técnico exista, tenga
+  el rol `TECNICO_EVALUADOR` y esté aprobado; marca la asignación vigente anterior del caso (si la
+  hay) como no vigente e inserta la nueva; si el caso estaba en `PENDING_ASSIGNMENT` lo transiciona a
+  `ASSIGNED` y registra la fila de `Caso_Estado_Historial`, todo en una sola transacción. Ver sección
+  "Asignación de técnico evaluador (RF-10)" para la dualidad con el endpoint.
+- `sp_programar_evaluacion(caso_id, accion, fecha_programada, prioridad, motivo, observaciones, usuario_id)`
+  con `accion` en `PROGRAMAR`/`REPROGRAMAR`/`CANCELAR`: crea, reprograma o cancela la programación de
+  un caso sin perder historial, valida el solapamiento del técnico asignado y, al programar por
+  primera vez, transiciona el caso a `SCHEDULED` y registra su historial. Ver sección "Programación y
+  agenda de evaluaciones (RF-07, RF-11)" para la dualidad con el endpoint y el límite conocido de la
+  validación de solapamiento.
+- `sp_iniciar_evaluacion(caso_id, usuario_id, version_regla_id)` crea la instancia de evaluación
+  contra la plantilla activa (`Plantilla_Activa`, no "la publicada más reciente" — ver sección
+  "Plantilla activa" arriba) y la versión de reglas indicada, validando que quien inicia sea el
+  técnico con asignación vigente, transiciona el caso a `IN_EVALUATION` y registra su historial,
+  todo en una sola transacción.
+- `sp_guardar_respuestas(instancia_id, item_id, opcion, observaciones, comentarios, usuario_id)`
+  guarda una respuesta con `INSERT ... ON CONFLICT (instancia_id, item_id) DO UPDATE`, de modo que
+  reguardar la misma pregunta actualiza la fila en lugar de duplicarla; valida que la instancia no
+  esté enviada, que el ítem sea una pregunta activa de la plantilla congelada, que la opción esté
+  declarada para esa plantilla y que `NA` solo se use si el ítem lo permite.
+- `sp_enviar_evaluacion(instancia_id, usuario_id)` bloquea la instancia y transiciona el caso a
+  `PENDING_REPORT` en una sola transacción, rechazando un segundo envío.
+- `sp_revisar_informe(instancia_id, decision, observaciones, usuario_id)` bloquea el expediente,
+  valida que esté en revisión y que se actúe sobre su última versión, registra la decisión y su
+  historial y transiciona a `APPROVED` o `CORRECTION_REQUIRED` de forma atómica.
+- `sp_cerrar_expediente(caso_id, resultado, usuario_id)` bloquea el expediente y exige estado
+  `APPROVED`, última versión aprobada y PDF oficial asociado; crea una sola acta de cierre,
+  transiciona a `CLOSED` y registra el historial. Una segunda llamada devuelve el cierre existente.
 
 Disparadores:
 
@@ -303,6 +1006,40 @@ Disparadores:
   `Plantilla_Evaluacion_Opcion`, `Plantilla_Evaluacion_Regla` y `Plantilla_Evaluacion_Criterio`
   impide alterar una versión publicada mediante la función `fn_plantilla_publicada_inmutable()`.
   Solo admite la transición de `DRAFT` a `PUBLISHED` en la cabecera.
+- `tr_empresa_historial_inmutable` sobre `Empresa_Historial` impide actualizar o eliminar una fila
+  de historial de empresa registrada, mediante la función `fn_empresa_historial_inmutable()`.
+- `tr_caso_asignacion_inmutable` sobre `Caso_Asignacion` conserva el historial de asignaciones:
+  admite únicamente marcar como no vigente una asignación anterior y rechaza el resto de
+  modificaciones y las eliminaciones.
+- `tr_evaluacion_instancia_inmutable` sobre `Evaluacion_Instancia` congela la cabecera de la
+  evaluación: la única modificación admitida es el envío (`IN_PROGRESS` a `SUBMITTED` fijando fecha
+  y autor), y no admite eliminaciones.
+- `tr_evaluacion_respuesta_bloqueada` sobre `Evaluacion_Respuesta` rechaza insertar, modificar o
+  eliminar respuestas de una instancia ya enviada.
+- `tr_evaluacion_respuesta_item_plantilla` sobre `Evaluacion_Respuesta` garantiza que cada respuesta
+  corresponda a una pregunta activa de la plantilla congelada en la instancia, incluso si la fila se
+  inserta directamente por SQL.
+- `tr_evaluacion_resultado_inmutable` sobre `Evaluacion_Resultado` y `Evaluacion_No_Conformidad`
+  impide alterar o eliminar el resultado registrado en el envío de una evaluación.
+- `tr_evaluacion_evidencia_valida` sobre `Evaluacion_Evidencia` admite adjuntar únicamente mientras la
+  instancia sigue en captura y solo con una respuesta de la misma instancia, mediante la función
+  `fn_evaluacion_evidencia_valida()`.
+- `tr_evaluacion_evidencia_inmutable` sobre `Evaluacion_Evidencia` impide modificar o eliminar el
+  metadato de una evidencia registrada, mediante la función `fn_evaluacion_evidencia_inmutable()`.
+- `tr_evaluacion_informe_valido` sobre `Evaluacion_Informe` admite emitir únicamente sobre una
+  evaluación ya enviada y con la versión consecutiva, mediante la función
+  `fn_evaluacion_informe_valido()`.
+- `tr_evaluacion_informe_inmutable` sobre `Evaluacion_Informe` impide eliminar una versión emitida y
+  reescribir su contenido; una corrección se emite como versión nueva. Usa la función
+  `fn_evaluacion_informe_inmutable()`.
+- `tr_evaluacion_informe_revision_valida` sobre `Evaluacion_Informe_Revision` admite revisar
+  únicamente la última versión emitida del informe y exige observaciones en las devoluciones,
+  mediante la función `fn_evaluacion_informe_revision_valida()`.
+- `tr_evaluacion_informe_revision_inmutable` sobre `Evaluacion_Informe_Revision` impide modificar o
+  eliminar una revisión registrada, mediante la función
+  `fn_evaluacion_informe_revision_inmutable()`.
+- `tr_informe_oficial_inmutable` y `tr_caso_cierre_inmutable` impiden modificar o eliminar los
+  metadatos del PDF oficial y el acta de cierre después de registrados.
 
 Los nombres anteriores representan el contrato estable. Su creación se versiona dentro de una migración de EF Core.
 
@@ -310,21 +1047,161 @@ Rutinas ya creadas por migraciones: `sp_registrar_calculo_riesgo`, `fn_calculo_r
 `tr_calculo_riesgo_inmutable`, incorporadas en `AddVersionedRiskRules`; `fn_plantilla_arbol`,
 `sp_importar_plantilla_bpm`, `sp_publicar_plantilla`, `fn_plantilla_publicada_inmutable` y
 `tr_plantilla_publicada_inmutable`, incorporadas en `AddBpmTemplateCatalogs`; `fn_perfil_usuario`,
-incorporada en `AddUserProfileFunction`. El resto sigue pendiente de las tareas correspondientes,
-incluida `fn_catalogo_opciones`: los catálogos generales descritos arriba se resuelven hoy con
-consultas EF equivalentes porque las pruebas de integración corren sobre el proveedor en memoria,
-que no ejecuta funciones de PostgreSQL.
+incorporada en `AddUserProfileFunction`; `fn_empresa_historial_inmutable` y
+`tr_empresa_historial_inmutable`, incorporadas en `AddCompanyProfileAndHistory`. Las tablas
+`Documento_Registro_Usuario` y `Solicitud_BPM_Documento` se incorporaron en
+`AddRegistrationAndBpmRequestDocuments`; no requirieron rutinas nuevas porque su validación de
+presencia se resuelve con una consulta simple en el endpoint. La tabla `Caso_Asignacion` y el
+procedimiento `sp_asignar_tecnico` se incorporaron en `AddCaseAssignment`. La tabla
+`Caso_Programacion` y el procedimiento `sp_programar_evaluacion` se incorporaron en
+`AddCaseSchedule`. Las tablas `Evaluacion_Instancia` y `Evaluacion_Respuesta`, los procedimientos
+`sp_iniciar_evaluacion`, `sp_guardar_respuestas` y `sp_enviar_evaluacion` y los disparadores
+`tr_evaluacion_instancia_inmutable`, `tr_evaluacion_respuesta_bloqueada` y
+`tr_evaluacion_respuesta_item_plantilla` se incorporaron en `AddEvaluationInstanceAndResponses`. Las
+tablas `Evaluacion_Resultado` y `Evaluacion_No_Conformidad`, el disparador
+`tr_evaluacion_resultado_inmutable` y la versión de `sp_iniciar_evaluacion` que congela la versión de
+reglas de riesgo se incorporaron en `AddEvaluationResult`. La tabla `Evaluacion_Evidencia`, las
+funciones `fn_evaluacion_evidencia_valida` y `fn_evaluacion_evidencia_inmutable` y sus disparadores
+se incorporaron en `AddEvaluationEvidence`. La tabla `Evaluacion_Informe`, las funciones
+`fn_evaluacion_informe_valido` y `fn_evaluacion_informe_inmutable` y sus disparadores se
+incorporaron en `AddEvaluationReport`. La tabla `Evaluacion_Informe_Revision`, las funciones
+`fn_evaluacion_informe_revision_valida`, `fn_evaluacion_informe_revision_inmutable`,
+`sp_revisar_informe` y sus disparadores se incorporaron en `AddEvaluationReportReview`. Las tablas
+`Evaluacion_Informe_Oficial` y `Caso_Cierre`, `sp_cerrar_expediente` y los disparadores de
+inmutabilidad se incorporaron en `AddOfficialReportAndCaseClosure`. El PDF se almacena mediante
+`IEvidenceStorage`; PostgreSQL conserva únicamente nombre, tipo MIME, tamaño, hash SHA-256, clave,
+fecha y usuario. La tabla `Notificacion` se incorporó en `AddOperationalReadsAndNotifications`, que
+no crea rutinas: es la vigésima y última migración. Sigue pendiente
+`fn_catalogo_opciones`: los catálogos generales descritos arriba se resuelven hoy con consultas EF
+equivalentes porque las pruebas de integración corren sobre el proveedor en memoria, que no ejecuta
+funciones de PostgreSQL.
 
 ## Instalación y actualización
 
+El esquema se aplica siempre con migraciones de EF Core, nunca con SQL manual fuera de migraciones.
+
 ```powershell
+# Aplicar todas las migraciones pendientes sobre la base configurada en .env
 dotnet ef database update `
   --project "backend\src\EBR.Infrastructure\EBR.Infrastructure.csproj" `
   --startup-project "backend\src\EBR.Api\EBR.Api.csproj"
 ```
 
-No se deben crear tablas manualmente en pgAdmin. pgAdmin se utiliza para inspeccionar el resultado de las migraciones, ejecutar consultas de diagnóstico y visualizar el diagrama E/R.
+Las 22 migraciones aplican limpio sobre una base vacía y dejan 55 tablas, 27 rutinas `sp_`/`fn_` y
+21 disparadores. Comprobación del estado:
 
-## Respaldo y portabilidad
+```powershell
+# Migraciones registradas frente a las presentes en el ensamblado
+dotnet ef migrations list `
+  --project "backend\src\EBR.Infrastructure\EBR.Infrastructure.csproj" `
+  --startup-project "backend\src\EBR.Api\EBR.Api.csproj"
+```
 
-La aplicación no depende de rutas locales. La cadena de conexión y secretos se suministran mediante variables de entorno. Un entorno nuevo se reconstruye con el código, las migraciones y los seeds versionados. Los respaldos se generan con `pg_dump` y se restauran con `pg_restore` en una versión compatible de PostgreSQL.
+Para revertir a una migración concreta se indica su nombre como destino (`dotnet ef database update
+<NombreMigracion>`); revertir a `0` vacía el esquema. No se deben crear ni alterar tablas
+manualmente en pgAdmin: pgAdmin se utiliza para inspeccionar el resultado de las migraciones,
+ejecutar consultas de diagnóstico y visualizar el diagrama E/R.
+
+Tras aplicar las migraciones, la base tiene el esquema y —en entorno `Development`— las cuentas de
+demostración y la empresa de ejemplo (`DevelopmentDataSeeder`, que corre al arrancar la API). La
+matriz de riesgo de alimentos y la plantilla BPM **no** se cargan automáticamente; ver "Importación
+y calidad de datos".
+
+## Diagnóstico
+
+Consultas de verificación sobre la base ya migrada (ejecutar con `psql` o pgAdmin):
+
+```sql
+-- Rutinas creadas por las migraciones (se esperan 27 entre funciones y procedimientos)
+SELECT n.nspname AS esquema, p.proname AS rutina,
+       CASE p.prokind WHEN 'f' THEN 'función' WHEN 'p' THEN 'procedimiento' END AS tipo
+FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE p.proname LIKE 'sp\_%' OR p.proname LIKE 'fn\_%'
+ORDER BY p.proname;
+
+-- Disparadores de inmutabilidad e integridad (se esperan 21)
+SELECT c.relname AS tabla, t.tgname AS disparador
+FROM pg_trigger t
+JOIN pg_class c ON c.oid = t.tgrelid
+WHERE NOT t.tgisinternal AND t.tgname LIKE 'tr\_%'
+ORDER BY c.relname, t.tgname;
+
+-- Conteo de tablas del esquema public (se esperan 55)
+SELECT count(*) FROM information_schema.tables
+WHERE table_schema = 'public' AND table_type = 'BASE TABLE';
+
+-- Última migración aplicada
+SELECT "MigrationId" FROM "__EFMigrationsHistory" ORDER BY "MigrationId" DESC LIMIT 1;
+
+-- ¿Hay una versión de reglas de riesgo publicada y vigente? (necesaria para calcular riesgo)
+SELECT id, version, publicado, activo, vigente_desde, vigente_hasta
+FROM "Version_Regla_Riesgo" ORDER BY version DESC;
+
+-- ¿Cuál plantilla está publicada? (informativo)
+SELECT "Id", nombre, estado, fecha_publicacion FROM "Plantilla_Evaluacion" ORDER BY "Id";
+
+-- ¿Cuál plantilla es la ACTIVA? (la que de verdad usa StartAsync para iniciar evaluaciones)
+SELECT pa.plantilla_id, pe.nombre, pe.estado, pa.fecha_activacion
+FROM "Plantilla_Activa" pa JOIN "Plantilla_Evaluacion" pe ON pe."Id" = pa.plantilla_id;
+```
+
+Salud de la API y de la conexión a la base:
+
+```text
+GET http://localhost:5080/health            -> estado de la API
+GET http://localhost:5080/health/database   -> PostgresHealthCheck (SELECT 1 contra la base)
+```
+
+Errores frecuentes:
+
+- `relation "..." does not exist` al arrancar la API: faltan migraciones; ejecutar `dotnet ef
+  database update`.
+- Una evaluación no puede iniciarse o el cálculo de riesgo se rechaza: falta sembrar la plantilla
+  BPM o la versión de reglas de riesgo (ver "Importación y calidad de datos").
+- `28P01` / autenticación rechazada: revisar `ConnectionStrings__EbrDatabase` en `.env`.
+
+## Respaldo y restauración
+
+La aplicación no depende de rutas locales: la cadena de conexión y los secretos se suministran por
+variables de entorno, y un entorno nuevo se reconstruye con el código, las migraciones y los seeds
+versionados. Los binarios de evidencias e informes oficiales viven fuera de la base (MinIO o
+`storage/`), así que un respaldo completo incluye la base **y** ese almacén de objetos.
+
+Respaldo de la base (formato comprimido, recomendado):
+
+```powershell
+pg_dump --format=custom --no-owner --no-privileges `
+  --dbname "postgresql://postgres:CONTRASENA@localhost:5432/ebr_bpm" `
+  --file "ebr_bpm_$(Get-Date -Format yyyyMMdd_HHmm).dump"
+```
+
+Restauración sobre una base vacía:
+
+```powershell
+# 1. Crear la base destino
+psql -U postgres -h localhost -c "CREATE DATABASE ebr_bpm_restore;"
+
+# 2. Restaurar
+pg_restore --no-owner --no-privileges --clean --if-exists `
+  --dbname "postgresql://postgres:CONTRASENA@localhost:5432/ebr_bpm_restore" `
+  "ebr_bpm_20260910_1200.dump"
+```
+
+Alternativa en SQL plano (portátil entre versiones mayores de PostgreSQL):
+
+```powershell
+pg_dump --no-owner --no-privileges --dbname ebr_bpm --file ebr_bpm.sql
+psql -U postgres -h localhost -d ebr_bpm_restore -f ebr_bpm.sql
+```
+
+Notas:
+
+- Usar una versión de `pg_restore`/`psql` igual o superior a la de origen. PostgreSQL 18 es la
+  versión de referencia del proyecto.
+- El volcado en formato `custom` conserva las rutinas `sp_`/`fn_` y los disparadores; no hace falta
+  volver a ejecutar migraciones sobre una base restaurada.
+- Si solo se necesita mover datos de referencia a otra base ya migrada, restaurar con
+  `--data-only --disable-triggers` para no chocar con los disparadores de inmutabilidad.
+- Tras restaurar, verificar con las consultas de la sección "Diagnóstico" y con
+  `GET /health/database`.

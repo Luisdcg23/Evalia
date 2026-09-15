@@ -1,8 +1,12 @@
 import { useState, useEffect } from "react";
-import { listCompanies } from "./features/companies/api";
-import { createAndSubmitRequest, listBpmRequests, type BpmRequest } from "./features/requests/api";
-import ReportViewer from "./features/reports/ReportViewer";
-import type { ReportRisk, SignedReport } from "./features/reports/report-pdf";
+import {
+  listCompanies, getCompany, listRepresentatives, updateCompany,
+  type Company, type CompanyRepresentative,
+} from "./features/companies/api";
+import { createAndSubmitRequest, listBpmRequests, type BpmRequest, type BpmRequestDocumentInput } from "./features/requests/api";
+import { createDocumentMetadata } from "./features/documents/metadata";
+import { listMyCases, type MyCaseRow } from "./features/operations/api";
+import NotificationsBell from "./features/notifications/NotificationsBell";
 
 function useWidth() {
   const [w, setW] = useState(() => window.innerWidth);
@@ -24,22 +28,8 @@ interface Solicitud {
   status: SolStatus; fechaLabel: string;
   tecnico: string | null; prioridad: Priority; progreso: number;
   observaciones?: string;
+  document?: BpmRequestDocumentInput;
 }
-
-/* ── Data ───────────────────────────────────────────────────── */
-const COMPANY_DATA = {
-  rnc:        "1-31-01234-5",
-  razonSocial:"Constructora García & Asociados, S.A.",
-  comercial:  "García Constructores",
-  actividad:  "Construcción y Obras Civiles",
-  provincia:  "Santo Domingo",
-  municipio:  "Distrito Nacional",
-  telefono:   "+1 (809) 555-0192",
-  correo:     "operaciones@garcia-const.com.do",
-  repLegal:   { nombre: "Francisco García Pérez",   cedula:   "001-1234567-8"  },
-  repCalidad: { nombre: "Mariela Torres Rodríguez", telefono: "+1 809 555-0208" },
-  repContacto:{ nombre: "Luis Mendoza Castillo",    correo:   "l.mendoza@garcia-const.com.do" },
-};
 
 function toSolicitud(request: BpmRequest): Solicitud {
   return {
@@ -192,14 +182,15 @@ function SolicitudCard({ sol, onToast, isNew }: { sol:Solicitud; onToast:(m:stri
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Dashboard Empresa ──────────────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function DashboardSection({ solicitudes, onNavigate, onToast }: {
+function DashboardSection({ solicitudes, cases, company, onNavigate, onToast }: {
   solicitudes: Solicitud[];
+  cases: MyCaseRow[];
+  company: Company | null;
   onNavigate: (t:Tab) => void;
   onToast: (m:string) => void;
 }) {
   const pending  = solicitudes.filter(s=>s.status==="Pendiente de Asignación").length;
-  const review   = solicitudes.filter(s=>s.status==="En Revisión").length;
-  const approved = solicitudes.filter(s=>s.status==="Aprobado").length;
+  const approved = cases.filter(c=>["APPROVED","CLOSED"].includes(c.status)).length;
 
   const hora = new Date().getHours();
   const greeting = hora < 12 ? "Buenos días" : hora < 19 ? "Buenas tardes" : "Buenas noches";
@@ -209,7 +200,7 @@ function DashboardSection({ solicitudes, onNavigate, onToast }: {
       {/* Welcome */}
       <div>
         <p style={{ fontSize:"0.6rem", fontWeight:700, color:"rgba(229,59,246,0.5)", letterSpacing:"0.14em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif", marginBottom:6 }}>EVALIA · PORTAL EMPRESA</p>
-        <h1 style={{ fontSize:"1.4rem", fontWeight:800, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", letterSpacing:"-0.02em", marginBottom:4 }}>{greeting}, García Constructores</h1>
+        <h1 style={{ fontSize:"1.4rem", fontWeight:800, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", letterSpacing:"-0.02em", marginBottom:4 }}>{greeting}, {company?.tradeName ?? "tu empresa"}</h1>
         <p style={{ fontSize:"0.78rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>Gestiona tus solicitudes BPM y evaluaciones desde aquí.</p>
       </div>
 
@@ -246,22 +237,22 @@ function DashboardSection({ solicitudes, onNavigate, onToast }: {
             <div style={{ width:36, height:36, borderRadius:11, background:"rgba(34,197,94,0.12)", borderTop:"1px solid rgba(34,197,94,0.3)", borderRight:"1px solid rgba(34,197,94,0.3)", borderBottom:"1px solid rgba(34,197,94,0.3)", borderLeft:"1px solid rgba(34,197,94,0.3)", display:"flex", alignItems:"center", justifyContent:"center" }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 11l3 3L22 4" stroke="#22c55e" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" stroke="#22c55e" strokeWidth="1.75"/></svg>
             </div>
-            <span style={{ fontSize:"1.8rem", fontWeight:900, color:"#22c55e", fontFamily:"Poppins, sans-serif", textShadow:"0 0 20px rgba(34,197,94,0.5)" }}>6</span>
+            <span style={{ fontSize:"1.8rem", fontWeight:900, color:"#22c55e", fontFamily:"Poppins, sans-serif", textShadow:"0 0 20px rgba(34,197,94,0.5)" }}>{cases.length}</span>
           </div>
           <p style={{ fontSize:"0.82rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", marginBottom:2 }}>Evaluaciones</p>
           <p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>{approved} aprobada{approved!==1?"s":""}</p>
         </button>
 
-        {/* Notificaciones */}
-        <button onClick={()=>onToast("No hay notificaciones nuevas")} style={{ padding:"18px 20px", borderRadius:16, cursor:"pointer", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderTop:"1px solid rgba(246,229,59,0.15)", borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:"2px solid rgba(246,229,59,0.5)", textAlign:"left" }}>
+        {/* Solicitudes en revisión */}
+        <button onClick={()=>onNavigate("solicitudes")} style={{ padding:"18px 20px", borderRadius:16, cursor:"pointer", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderTop:"1px solid rgba(246,229,59,0.15)", borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:"2px solid rgba(246,229,59,0.5)", textAlign:"left" }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
             <div style={{ width:36, height:36, borderRadius:11, background:"rgba(246,229,59,0.12)", borderTop:"1px solid rgba(246,229,59,0.3)", borderRight:"1px solid rgba(246,229,59,0.3)", borderBottom:"1px solid rgba(246,229,59,0.3)", borderLeft:"1px solid rgba(246,229,59,0.3)", display:"flex", alignItems:"center", justifyContent:"center" }}>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0" stroke="#F6E53B" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/></svg>
             </div>
-            <span style={{ fontSize:"1.8rem", fontWeight:900, color:"#F6E53B", fontFamily:"Poppins, sans-serif", textShadow:"0 0 20px rgba(246,229,59,0.5)" }}>2</span>
+            <span style={{ fontSize:"1.8rem", fontWeight:900, color:"#F6E53B", fontFamily:"Poppins, sans-serif", textShadow:"0 0 20px rgba(246,229,59,0.5)" }}>{pending}</span>
           </div>
-          <p style={{ fontSize:"0.82rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", marginBottom:2 }}>Notificaciones</p>
-          <p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>2 sin leer</p>
+          <p style={{ fontSize:"0.82rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", marginBottom:2 }}>Pendientes de asignación</p>
+          <p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>Solicitudes en curso</p>
         </button>
       </div>
 
@@ -293,7 +284,8 @@ function DashboardSection({ solicitudes, onNavigate, onToast }: {
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Nueva Solicitud BPM (form) ─────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function NuevaSolicitudSection({ onSubmit, onCancel }: {
+function NuevaSolicitudSection({ company, onSubmit, onCancel }: {
+  company: Company | null;
   onSubmit: (sol: Solicitud) => void;
   onCancel: () => void;
 }) {
@@ -303,13 +295,17 @@ function NuevaSolicitudSection({ onSubmit, onCancel }: {
   const [prioridad,   setPrioridad]   = useState<Priority>("Media");
   const [submitting,  setSubmitting]  = useState(false);
   const [hasDraft,    setHasDraft]    = useState(false);
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const [formError, setFormError] = useState("");
 
-  const canSubmit = tipoEstab && motivo;
+  const canSubmit = Boolean(tipoEstab && motivo && documentFile);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!canSubmit) return;
     setSubmitting(true);
-    setTimeout(() => {
+    setFormError("");
+    try {
+      const document = await createDocumentMetadata(documentFile!, "SOLICITUD_BPM");
       const nextId = `SOL-2026-${String(Math.floor(43 + Math.random() * 10)).padStart(4,"0")}`;
       const titulo = motivo === "Otro" ? (observ.split(" ").slice(0,4).join(" ") || "Nueva Solicitud") : motivo;
       const newSol: Solicitud = {
@@ -323,9 +319,13 @@ function NuevaSolicitudSection({ onSubmit, onCancel }: {
         prioridad,
         progreso: 0,
         observaciones: observ,
+        document,
       };
       onSubmit(newSol);
-    }, 1600);
+    } catch {
+      setFormError("No fue posible preparar el documento seleccionado.");
+      setSubmitting(false);
+    }
   };
 
   const handleDraft = () => {
@@ -356,10 +356,10 @@ function NuevaSolicitudSection({ onSubmit, onCancel }: {
           {/* Empresa — auto-filled */}
           <div>
             <p style={{ fontSize:"0.58rem", fontWeight:700, color:"rgba(148,163,184,0.3)", textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"Poppins, sans-serif", marginBottom:8 }}>DATOS DE LA EMPRESA</p>
-            <FloatInput id="empresa" label="Empresa" value={COMPANY_DATA.razonSocial} onChange={()=>{}} readOnly />
+            <FloatInput id="empresa" label="Empresa" value={company?.legalName ?? ""} onChange={()=>{}} readOnly />
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(180px, 1fr))", gap:12, marginTop:12 }}>
-              <FloatInput id="rnc-form" label="RNC" value={COMPANY_DATA.rnc} onChange={()=>{}} readOnly mono />
-              <FloatInput id="actividad-form" label="Actividad" value={COMPANY_DATA.actividad} onChange={()=>{}} readOnly />
+              <FloatInput id="rnc-form" label="RNC" value={company?.rnc ?? ""} onChange={()=>{}} readOnly mono />
+              <FloatInput id="actividad-form" label="Actividad" value={company?.economicActivity ?? ""} onChange={()=>{}} readOnly />
             </div>
           </div>
 
@@ -397,10 +397,16 @@ function NuevaSolicitudSection({ onSubmit, onCancel }: {
           {/* Documentación placeholder */}
           <div>
             <p style={{ fontSize:"0.58rem", fontWeight:700, color:"rgba(148,163,184,0.3)", textTransform:"uppercase", letterSpacing:"0.1em", fontFamily:"Poppins, sans-serif", marginBottom:8 }}>DOCUMENTACIÓN OBLIGATORIA</p>
-            <div style={{ borderRadius:14, padding:"20px", borderTop:"1.5px dashed rgba(255,255,255,0.12)", borderRight:"1.5px dashed rgba(255,255,255,0.12)", borderBottom:"1.5px dashed rgba(255,255,255,0.12)", borderLeft:"1.5px dashed rgba(255,255,255,0.12)", background:"rgba(255,255,255,0.02)", display:"flex", flexDirection:"column", alignItems:"center", gap:8, cursor:"pointer" }}>
+            <label style={{ borderRadius:14, padding:"20px", border:"1.5px dashed rgba(255,255,255,0.12)", background:"rgba(255,255,255,0.02)", display:"flex", flexDirection:"column", alignItems:"center", gap:8, cursor:"pointer" }}>
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12" stroke="rgba(148,163,184,0.3)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              <p style={{ fontSize:"0.75rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif", textAlign:"center" }}>Adjuntar documentos<br/><span style={{ fontSize:"0.62rem", opacity:0.6 }}>PDF, JPG, PNG · máx. 10 MB</span></p>
-            </div>
+              <p style={{ fontSize:"0.75rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif", textAlign:"center" }}>{documentFile ? documentFile.name : "Adjuntar documento"}<br/><span style={{ fontSize:"0.62rem", opacity:0.6 }}>PDF, JPG, PNG · máx. 10 MB</span></p>
+              <input type="file" accept="application/pdf,image/jpeg,image/png" hidden onChange={event => {
+                const selected = event.target.files?.[0] ?? null;
+                if (selected && selected.size > 10 * 1024 * 1024) { setFormError("El documento supera el límite de 10 MB."); return; }
+                setDocumentFile(selected); setFormError("");
+              }} />
+            </label>
+            {formError && <p role="alert" style={{ color:"#fb7185", fontSize:"0.7rem", marginTop:6 }}>{formError}</p>}
           </div>
         </div>
       </div>
@@ -419,7 +425,7 @@ function NuevaSolicitudSection({ onSubmit, onCancel }: {
 
       {/* Validation hint */}
       {!canSubmit && (
-        <p style={{ textAlign:"center", fontSize:"0.65rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif", marginTop:6 }}>Completa el tipo de establecimiento y el motivo para enviar.</p>
+        <p style={{ textAlign:"center", fontSize:"0.65rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif", marginTop:6 }}>Completa el tipo, el motivo y adjunta la documentación obligatoria.</p>
       )}
     </div>
   );
@@ -437,8 +443,9 @@ function SolicitudesSection({ solicitudes, newId, onToast, onNavigate }: {
   const [filter, setFilter] = useState<SolStatus|"Todas">("Todas");
   const filtered = filter==="Todas" ? solicitudes : solicitudes.filter(s=>s.status===filter);
 
-  const counts = {
+  const counts: Record<SolStatus | "Todas", number> = {
     "Todas": solicitudes.length,
+    "Borrador":                 solicitudes.filter(s=>s.status==="Borrador").length,
     "Pendiente de Asignación": solicitudes.filter(s=>s.status==="Pendiente de Asignación").length,
     "En Revisión":             solicitudes.filter(s=>s.status==="En Revisión").length,
     "Aprobado":                solicitudes.filter(s=>s.status==="Aprobado").length,
@@ -498,38 +505,86 @@ function SolicitudesSection({ solicitudes, newId, onToast, onNavigate }: {
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Perfil ──────────────────────────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function PerfilSection({ isMobile, onToast }: { isMobile:boolean; onToast:(m:string)=>void }) {
-  const [rnc,       setRnc]       = useState(COMPANY_DATA.rnc);
-  const [razon,     setRazon]     = useState(COMPANY_DATA.razonSocial);
-  const [comercial, setComercial] = useState(COMPANY_DATA.comercial);
-  const [actividad, setActividad] = useState(COMPANY_DATA.actividad);
-  const [provincia, setProvincia] = useState(COMPANY_DATA.provincia);
-  const [municipio, setMunicipio] = useState(COMPANY_DATA.municipio);
-  const [telefono,  setTelefono]  = useState(COMPANY_DATA.telefono);
-  const [correo,    setCorreo]    = useState(COMPANY_DATA.correo);
-  const [repLName,  setRepLName]  = useState(COMPANY_DATA.repLegal.nombre);
-  const [repLCed,   setRepLCed]   = useState(COMPANY_DATA.repLegal.cedula);
-  const [repCName,  setRepCName]  = useState(COMPANY_DATA.repCalidad.nombre);
-  const [repCTel,   setRepCTel]   = useState(COMPANY_DATA.repCalidad.telefono);
-  const [repKName,  setRepKName]  = useState(COMPANY_DATA.repContacto.nombre);
-  const [repKMail,  setRepKMail]  = useState(COMPANY_DATA.repContacto.correo);
+const REP_TYPE_LABEL: Record<string, { label: string; accent: string }> = {
+  LEGAL: { label: "Representante Legal", accent: "#E53BF6" },
+  CALIDAD: { label: "Rep. Calidad", accent: "#F6E53B" },
+  CONTACTO_PRINCIPAL: { label: "Contacto Principal", accent: "#3BF6E5" },
+};
+
+function PerfilSection({ isMobile, onToast, accessToken, companyId }: {
+  isMobile:boolean; onToast:(m:string)=>void; accessToken:string; companyId:number|null;
+}) {
+  const [state, setState] = useState<"loading" | "loaded" | "empty" | "error">("loading");
+  const [error, setError] = useState("");
+  const [rnc,       setRnc]       = useState("");
+  const [razon,     setRazon]     = useState("");
+  const [comercial, setComercial] = useState("");
+  const [actividad, setActividad] = useState("");
+  const [direccion, setDireccion] = useState("");
+  const [provincia, setProvincia] = useState("");
+  const [municipio, setMunicipio] = useState("");
+  const [telefono,  setTelefono]  = useState("");
+  const [correo,    setCorreo]    = useState("");
+  const [versionToken, setVersionToken] = useState("");
+  const [representatives, setRepresentatives] = useState<CompanyRepresentative[]>([]);
   const [saving,    setSaving]    = useState(false);
   const [saved,     setSaved]     = useState(false);
 
-  const handleSave = () => {
-    setSaving(true); setSaved(false);
-    setTimeout(()=>{ setSaving(false); setSaved(true); onToast("Cambios guardados correctamente"); setTimeout(()=>setSaved(false),2500); },1600);
+  const applyCompany = (company: Company) => {
+    setRnc(company.rnc);
+    setRazon(company.legalName);
+    setComercial(company.tradeName);
+    setActividad(company.economicActivity ?? "");
+    setDireccion(company.address ?? "");
+    setProvincia(company.province ?? "");
+    setMunicipio(company.municipality ?? "");
+    setTelefono(company.phoneNumber ?? "");
+    setCorreo(company.email ?? "");
+    setVersionToken(company.versionToken ?? "");
   };
 
-  const RepCard = ({ role, accent, nameVal, nameSet, fieldLabel, fieldVal, fieldSet }: { role:string; accent:string; nameVal:string; nameSet:(v:string)=>void; fieldLabel:string; fieldVal:string; fieldSet:(v:string)=>void }) => (
-    <div style={{ borderRadius:14, padding:"14px 14px 12px", background:"rgba(12,20,40,0.7)", backdropFilter:"blur(16px)", WebkitBackdropFilter:"blur(16px)", borderTop:`1px solid rgba(255,255,255,0.07)`, borderRight:`1px solid rgba(255,255,255,0.05)`, borderBottom:`1px solid rgba(255,255,255,0.05)`, borderLeft:`3px solid ${accent}66` }}>
-      <p style={{ fontSize:"0.6rem", fontWeight:700, color:accent, fontFamily:"Poppins, sans-serif", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:10 }}>{role}</p>
-      <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
-        <FloatInput id={`${role}-name`} label="Nombre completo" value={nameVal} onChange={nameSet} />
-        <FloatInput id={`${role}-field`} label={fieldLabel} value={fieldVal} onChange={fieldSet} />
-      </div>
-    </div>
-  );
+  const load = () => {
+    if (companyId === null) { setState("empty"); return; }
+    setState("loading");
+    setError("");
+    void Promise.all([
+      getCompany(accessToken, companyId),
+      listRepresentatives(accessToken, companyId).catch(() => [] as CompanyRepresentative[]),
+    ])
+      .then(([company, reps]) => {
+        applyCompany(company);
+        setRepresentatives(reps);
+        setState("loaded");
+      })
+      .catch(loadError => {
+        setError(loadError instanceof Error ? loadError.message : "No fue posible cargar el perfil.");
+        setState("error");
+      });
+  };
+
+  useEffect(load, [accessToken, companyId]);
+
+  const handleSave = async () => {
+    if (companyId === null) return;
+    setSaving(true); setSaved(false); setError("");
+    try {
+      const updated = await updateCompany(accessToken, companyId, {
+        legalName: razon, tradeName: comercial, address: direccion, municipality: municipio,
+        province: provincia, phoneNumber: telefono, email: correo, economicActivity: actividad,
+        versionToken,
+      });
+      applyCompany(updated);
+      setSaving(false); setSaved(true);
+      onToast("Perfil de empresa actualizado");
+      setTimeout(() => setSaved(false), 2500);
+    } catch (saveError) {
+      setSaving(false);
+      const message = saveError instanceof Error ? saveError.message : "No fue posible guardar el perfil.";
+      setError(message);
+      onToast(message);
+      if (message.includes("modificada por otra persona")) load();
+    }
+  };
 
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16, maxWidth:820 }}>
@@ -537,15 +592,28 @@ function PerfilSection({ isMobile, onToast }: { isMobile:boolean; onToast:(m:str
         <p style={{ fontSize:"0.56rem", fontWeight:700, color:"rgba(229,59,246,0.5)", letterSpacing:"0.14em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif", marginBottom:4 }}>EVALIA · PORTAL EMPRESA</p>
         <h2 style={{ fontSize:"1.1rem", fontWeight:800, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", letterSpacing:"-0.02em" }}>Perfil de Empresa</h2>
       </div>
+
+      {state === "loading" && <p style={{ color:"#94a3b8", fontSize:"0.8rem", fontFamily:"Poppins, sans-serif" }}>Cargando el perfil de la empresa…</p>}
+      {state === "empty" && <p style={{ color:"rgba(148,163,184,0.55)", fontSize:"0.8rem", fontFamily:"Poppins, sans-serif" }}>Tu usuario no tiene una empresa vinculada.</p>}
+      {state === "error" && (
+        <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+          <p role="alert" style={{ color:"#fb7185", fontSize:"0.8rem", fontFamily:"Poppins, sans-serif" }}>{error}</p>
+          <button onClick={load} style={{ alignSelf:"flex-start", padding:"8px 16px", borderRadius:10, cursor:"pointer", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.12)", color:"rgba(148,163,184,0.7)", fontFamily:"Poppins, sans-serif", fontSize:"0.75rem", fontWeight:600 }}>Reintentar</button>
+        </div>
+      )}
+
+      {state === "loaded" && <>
+      {error && <p role="alert" style={{ color:"#fb7185", fontSize:"0.75rem", fontFamily:"Poppins, sans-serif" }}>{error}</p>}
       <div style={{ borderRadius:20, overflow:"hidden", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(32px) saturate(160%)", WebkitBackdropFilter:"blur(32px) saturate(160%)", borderTop:"1px solid rgba(59,246,229,0.18)", borderRight:"1px solid rgba(255,255,255,0.06)", borderBottom:"1px solid rgba(255,255,255,0.06)", borderLeft:"1px solid rgba(255,255,255,0.06)" }}>
         <div style={{ height:2.5, background:"linear-gradient(90deg,#3BF6E5,#8b5cf6,#E53BF6)" }} />
         <div style={{ padding: isMobile?"18px 16px":"24px 26px" }}>
           <p style={{ fontSize:"0.58rem", fontWeight:700, color:"rgba(148,163,184,0.3)", letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif", marginBottom:14 }}>DATOS DEL ESTABLECIMIENTO</p>
           <div style={{ display:"grid", gridTemplateColumns: isMobile?"1fr":"1fr 1fr", gap:12 }}>
-            <div style={{ gridColumn: isMobile?"1":"1/-1" }}><FloatInput id="rnc-p" label="RNC" value={rnc} onChange={setRnc} readOnly mono /></div>
+            <div style={{ gridColumn: isMobile?"1":"1/-1" }}><FloatInput id="rnc-p" label="RNC" value={rnc} onChange={()=>{}} readOnly mono /></div>
             <FloatInput id="razon-p" label="Razón Social" value={razon} onChange={setRazon} />
             <FloatInput id="comercial-p" label="Nombre Comercial" value={comercial} onChange={setComercial} />
             <div style={{ gridColumn: isMobile?"1":"1/-1" }}><FloatInput id="actividad-p" label="Actividad Económica" value={actividad} onChange={setActividad} /></div>
+            <div style={{ gridColumn: isMobile?"1":"1/-1" }}><FloatInput id="direccion-p" label="Dirección" value={direccion} onChange={setDireccion} /></div>
             <FloatInput id="provincia-p" label="Provincia" value={provincia} onChange={setProvincia} />
             <FloatInput id="municipio-p" label="Municipio" value={municipio} onChange={setMunicipio} />
             <FloatInput id="telefono-p" label="Teléfono" value={telefono} onChange={setTelefono} />
@@ -557,17 +625,31 @@ function PerfilSection({ isMobile, onToast }: { isMobile:boolean; onToast:(m:str
         <div style={{ height:2.5, background:"linear-gradient(90deg,#E53BF6,#8b5cf6,#3BF6E5)" }} />
         <div style={{ padding: isMobile?"18px 16px":"24px 26px" }}>
           <p style={{ fontSize:"0.58rem", fontWeight:700, color:"rgba(148,163,184,0.3)", letterSpacing:"0.12em", textTransform:"uppercase", fontFamily:"Poppins, sans-serif", marginBottom:14 }}>REPRESENTANTES</p>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(220px, 1fr))", gap:12 }}>
-            <RepCard role="Representante Legal" accent="#E53BF6" nameVal={repLName} nameSet={setRepLName} fieldLabel="Cédula" fieldVal={repLCed} fieldSet={setRepLCed} />
-            <RepCard role="Rep. Calidad" accent="#F6E53B" nameVal={repCName} nameSet={setRepCName} fieldLabel="Teléfono" fieldVal={repCTel} fieldSet={setRepCTel} />
-            <RepCard role="Contacto Principal" accent="#3BF6E5" nameVal={repKName} nameSet={setRepKName} fieldLabel="Correo" fieldVal={repKMail} fieldSet={setRepKMail} />
-          </div>
+          {representatives.length === 0
+            ? <p style={{ fontSize:"0.75rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>Esta empresa todavía no tiene representantes registrados.</p>
+            : (
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(220px, 1fr))", gap:12 }}>
+                {representatives.map(rep => {
+                  const meta = REP_TYPE_LABEL[rep.representativeType] ?? { label: rep.representativeType, accent: "#94a3b8" };
+                  return (
+                    <div key={rep.id} style={{ borderRadius:14, padding:"14px 14px 12px", background:"rgba(12,20,40,0.7)", backdropFilter:"blur(16px)", WebkitBackdropFilter:"blur(16px)", borderTop:"1px solid rgba(255,255,255,0.07)", borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:`3px solid ${meta.accent}66` }}>
+                      <p style={{ fontSize:"0.6rem", fontWeight:700, color:meta.accent, fontFamily:"Poppins, sans-serif", letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:8 }}>{meta.label}</p>
+                      <p style={{ fontSize:"0.82rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{rep.fullName}</p>
+                      <p style={{ fontSize:"0.66rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif", marginTop:2 }}>Doc. {rep.documentNumber}</p>
+                      <p style={{ fontSize:"0.66rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>{rep.email}</p>
+                      <p style={{ fontSize:"0.66rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>{rep.phoneNumber}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
         </div>
       </div>
       <button onClick={handleSave} disabled={saving} style={{ width:"100%", height:52, borderRadius:14, border:"none", cursor:saving?"not-allowed":"pointer", fontWeight:800, fontSize:"0.95rem", fontFamily:"Poppins, sans-serif", background: saved?"rgba(34,197,94,0.12)":"linear-gradient(135deg,#3BF6E5,#06b6d4,#8b5cf6)", color: saved?"#22c55e":"#0F172A", boxShadow: saved?"0 8px 24px rgba(34,197,94,0.2)":"0 8px 28px rgba(59,246,229,0.3)", borderTop: saved?"1px solid rgba(34,197,94,0.35)":"none", borderRight: saved?"1px solid rgba(34,197,94,0.35)":"none", borderBottom: saved?"1px solid rgba(34,197,94,0.35)":"none", borderLeft: saved?"1px solid rgba(34,197,94,0.35)":"none", display:"flex", alignItems:"center", justifyContent:"center", gap:10, transition:"all 0.25s ease" }}>
         {saving ? <><span style={{ width:16,height:16,borderRadius:"50%",borderTop:"2px solid #0F172A",borderRight:"2px solid rgba(0,0,0,0.2)",borderBottom:"2px solid rgba(0,0,0,0.2)",borderLeft:"2px solid rgba(0,0,0,0.2)",animation:"cpSpin 0.7s linear infinite",display:"inline-block" }}/>Guardando…</>
         : saved ? <>✓ Cambios guardados</> : <>Guardar Cambios</>}
       </button>
+      </>}
     </div>
   );
 }
@@ -575,15 +657,23 @@ function PerfilSection({ isMobile, onToast }: { isMobile:boolean; onToast:(m:str
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Evaluaciones (historial) ───────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function EvaluacionesSection({ onOpenReport }: { onOpenReport:(r:SignedReport)=>void }) {
-  const EVS = [
-    { id:"EBR-2026-0087", tipo:"Auditoría Calidad",    fecha:"28 ago 2026", tecnico:"Ing. R. Méndez",    estado:"Aprobado",    riesgo:"Alto",     color:"#22c55e" },
-    { id:"EBR-2026-0083", tipo:"Evaluación General",   fecha:"22 ago 2026", tecnico:"Ing. M. Santos",    estado:"En Revisión", riesgo:"Crítico",  color:"#8b5cf6" },
-    { id:"EBR-2026-0071", tipo:"Inspección BPM",       fecha:"10 ago 2026", tecnico:"Lic. C. Vargas",    estado:"Aprobado",    riesgo:"Moderado", color:"#22c55e" },
-    { id:"EBR-2026-0065", tipo:"Inspección Eléctrica", fecha:"02 ago 2026", tecnico:"Lic. A. Fernández", estado:"Aprobado",    riesgo:"Bajo",     color:"#22c55e" },
-    { id:"EBR-2026-0051", tipo:"Auditoría Calidad",    fecha:"15 jul 2026", tecnico:"Ing. R. Méndez",    estado:"Rechazado",   riesgo:"Alto",     color:"#E53BF6" },
-    { id:"EBR-2026-0040", tipo:"Inspección General",   fecha:"01 jul 2026", tecnico:"Ing. M. Santos",    estado:"Aprobado",    riesgo:"Moderado", color:"#22c55e" },
-  ];
+const CASE_STATUS_ES: Record<string, { label: string; color: string }> = {
+  PENDING_ASSIGNMENT:  { label: "Pendiente de asignación", color: "rgba(148,163,184,0.7)" },
+  ASSIGNED:            { label: "Asignado", color: "#3BF6E5" },
+  SCHEDULED:           { label: "Programado", color: "#3BF6E5" },
+  IN_EVALUATION:       { label: "En evaluación", color: "#F6E53B" },
+  PENDING_REPORT:      { label: "Pendiente de informe", color: "#F6E53B" },
+  IN_REVIEW:           { label: "En revisión", color: "#8b5cf6" },
+  CORRECTION_REQUIRED: { label: "Corrección solicitada", color: "#E53BF6" },
+  APPROVED:            { label: "Aprobado", color: "#22c55e" },
+  CLOSED:              { label: "Cerrado", color: "#22c55e" },
+  CANCELLED:           { label: "Cancelado", color: "#E53BF6" },
+};
+
+function EvaluacionesSection({ cases, state, error }: { cases: MyCaseRow[]; state: "loading" | "loaded" | "error"; error: string }) {
+  const aprobadas = cases.filter(c => ["APPROVED", "CLOSED"].includes(c.status)).length;
+  const enRevision = cases.filter(c => ["IN_REVIEW", "PENDING_REPORT"].includes(c.status)).length;
+  const rechazadas = cases.filter(c => c.status === "CANCELLED").length;
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:16, maxWidth:820 }}>
       <div style={{ marginBottom:4 }}>
@@ -591,28 +681,33 @@ function EvaluacionesSection({ onOpenReport }: { onOpenReport:(r:SignedReport)=>
         <h2 style={{ fontSize:"1.1rem", fontWeight:800, color:"#f1f5f9", fontFamily:"Poppins, sans-serif", letterSpacing:"-0.02em" }}>Historial de Evaluaciones</h2>
       </div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(120px, 1fr))", gap:9 }}>
-        {[{label:"Total",v:6,c:"rgba(148,163,184,0.6)"},{label:"Aprobadas",v:4,c:"#22c55e"},{label:"En Revisión",v:1,c:"#8b5cf6"},{label:"Rechazadas",v:1,c:"#E53BF6"}].map(s=>(
+        {[{label:"Total",v:cases.length,c:"rgba(148,163,184,0.6)"},{label:"Aprobadas",v:aprobadas,c:"#22c55e"},{label:"En Revisión",v:enRevision,c:"#8b5cf6"},{label:"Canceladas",v:rechazadas,c:"#E53BF6"}].map(s=>(
           <div key={s.label} style={{ borderRadius:13, padding:"12px 14px", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderTop:`1px solid ${s.c}18`, borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:`2px solid ${s.c}55` }}>
-            <p style={{ fontSize:"1.6rem", fontWeight:900, color:s.c, fontFamily:"Poppins, sans-serif", lineHeight:1, textShadow:`0 0 16px ${s.c}40` }}>{s.v}</p>
+            <p style={{ fontSize:"1.6rem", fontWeight:900, color:s.c, fontFamily:"Poppins, sans-serif", lineHeight:1, textShadow:`0 0 16px ${s.c}40` }}>{state === "loading" ? "…" : s.v}</p>
             <p style={{ fontSize:"0.52rem", color:"rgba(148,163,184,0.35)", fontFamily:"Poppins, sans-serif", textTransform:"uppercase", letterSpacing:"0.08em", marginTop:3 }}>{s.label}</p>
           </div>
         ))}
       </div>
+      {state === "loading" && <p style={{ color:"#94a3b8", fontSize:"0.78rem", fontFamily:"Poppins, sans-serif" }}>Cargando evaluaciones…</p>}
+      {state === "error" && <p role="alert" style={{ color:"#fb7185", fontSize:"0.78rem", fontFamily:"Poppins, sans-serif" }}>{error}</p>}
+      {state === "loaded" && cases.length === 0 && <p style={{ color:"rgba(148,163,184,0.4)", fontSize:"0.85rem", fontFamily:"Poppins, sans-serif" }}>Todavía no hay evaluaciones registradas para tu empresa.</p>}
       <div style={{ display:"flex", flexDirection:"column", gap:9 }}>
-        {EVS.map(ev=>(
-          <div key={ev.id} style={{ borderRadius:15, padding:"14px 16px", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderTop:"1px solid rgba(255,255,255,0.07)", borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:`2px solid ${ev.color}55`, display:"flex", alignItems:"center", gap:14 }}>
-            <div style={{ flex:1, minWidth:0 }}>
-              <span style={{ fontSize:"0.48rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.22)" }}>{ev.id}</span>
-              <p style={{ fontSize:"0.88rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{ev.tipo}</p>
-              <p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>{ev.tecnico} · {ev.fecha}</p>
+        {cases.map(ev=>{
+          const meta = CASE_STATUS_ES[ev.status] ?? { label: ev.status, color: "rgba(148,163,184,0.6)" };
+          return (
+            <div key={ev.id} style={{ borderRadius:15, padding:"14px 16px", background:"rgba(10,18,36,0.82)", backdropFilter:"blur(20px)", WebkitBackdropFilter:"blur(20px)", borderTop:"1px solid rgba(255,255,255,0.07)", borderRight:"1px solid rgba(255,255,255,0.05)", borderBottom:"1px solid rgba(255,255,255,0.05)", borderLeft:`2px solid ${meta.color}55`, display:"flex", alignItems:"center", gap:14 }}>
+              <div style={{ flex:1, minWidth:0 }}>
+                <span style={{ fontSize:"0.48rem", fontFamily:"'Courier New',monospace", color:"rgba(148,163,184,0.22)" }}>CAS-{ev.id}</span>
+                <p style={{ fontSize:"0.88rem", fontWeight:700, color:"#f1f5f9", fontFamily:"Poppins, sans-serif" }}>{ev.companyName}</p>
+                <p style={{ fontSize:"0.62rem", color:"rgba(148,163,184,0.4)", fontFamily:"Poppins, sans-serif" }}>{new Date(ev.createdAt).toLocaleDateString("es-DO")}</p>
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:5 }}>
+                <span style={{ padding:"2px 9px", borderRadius:99, fontSize:"0.6rem", fontWeight:700, color:meta.color, background:`${meta.color}14`, border:`1px solid ${meta.color}40`, fontFamily:"Poppins, sans-serif" }}>{meta.label}</span>
+                {ev.bpmPercentage != null && <span style={{ fontSize:"0.55rem", color:"rgba(148,163,184,0.5)", fontFamily:"Poppins, sans-serif" }}>BPM {Number(ev.bpmPercentage).toFixed(1)}% · {ev.classification ?? "—"}</span>}
+              </div>
             </div>
-            <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:5 }}>
-              <span style={{ padding:"2px 9px", borderRadius:99, fontSize:"0.6rem", fontWeight:700, color:ev.color, background:`${ev.color}14`, borderTop:`1px solid ${ev.color}40`, borderRight:`1px solid ${ev.color}40`, borderBottom:`1px solid ${ev.color}40`, borderLeft:`1px solid ${ev.color}40`, fontFamily:"Poppins, sans-serif" }}>{ev.estado}</span>
-              <span style={{ fontSize:"0.55rem", color:"rgba(148,163,184,0.3)", fontFamily:"Poppins, sans-serif" }}>{ev.riesgo}</span>
-            </div>
-            {ev.estado==="Aprobado" && <button onClick={()=>onOpenReport({ report:{ id:ev.id, empresa:COMPANY_DATA.razonSocial, tipo:ev.tipo, riesgo:ev.riesgo as ReportRisk, fecha:ev.fecha, tecnico:ev.tecnico }, signature:{ signerName:ev.tecnico, signedAt:ev.fecha } })} style={{ width:32, height:32, borderRadius:9, cursor:"pointer", background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.3)", borderRight:"1px solid rgba(34,197,94,0.3)", borderBottom:"1px solid rgba(34,197,94,0.3)", borderLeft:"1px solid rgba(34,197,94,0.3)", color:"#22c55e", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></button>}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -621,10 +716,10 @@ function EvaluacionesSection({ onOpenReport }: { onOpenReport:(r:SignedReport)=>
 /* ──────────────────────────────────────────────────────────── */
 /* ── Section: Configuración ───────────────────────────────── */
 /* ──────────────────────────────────────────────────────────── */
-function ConfiguracionSection({ onToast }: { onToast:(m:string)=>void }) {
-  const [nombre,   setNombre]   = useState("Gerencia García");
-  const [correo,   setCorreo]   = useState("gerencia@empresa.com");
-  const [telefono, setTelefono] = useState(COMPANY_DATA.telefono);
+function ConfiguracionSection({ userName, onToast }: { userName:string; onToast:(m:string)=>void }) {
+  const [nombre,   setNombre]   = useState(userName);
+  const [correo,   setCorreo]   = useState("");
+  const [telefono, setTelefono] = useState("");
   const [n1,setN1]=useState(true); const [n2,setN2]=useState(true); const [n3,setN3]=useState(false);
   return (
     <div style={{ display:"flex", flexDirection:"column", gap:14, maxWidth:660 }}>
@@ -684,21 +779,34 @@ export default function CompanyPortal({
   const [activeTab,   setActiveTab]   = useState<Tab>("dashboard");
   const [navOpen,     setNavOpen]     = useState(false);
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
-  const [companyId, setCompanyId] = useState<number | null>(null);
+  const [company, setCompany] = useState<Company | null>(null);
+  const companyId = company?.id ?? null;
   const [newEntryId,  setNewEntryId]  = useState<string|null>(null);
   const [toast,       setToast]       = useState<string|null>(null);
-  /* Informe ya firmado por el técnico: la empresa solo lo descarga o imprime. */
-  const [signedReport, setSignedReport] = useState<SignedReport|null>(null);
+  const [cases,       setCases]       = useState<MyCaseRow[]>([]);
+  const [casesState,  setCasesState]  = useState<"loading" | "loaded" | "error">("loading");
+  const [casesError,  setCasesError]  = useState("");
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(()=>setToast(null), 2800); };
 
   useEffect(() => {
     void Promise.all([listCompanies(accessToken), listBpmRequests(accessToken)])
       .then(([companies, requests]) => {
-        setCompanyId(companies[0]?.id ?? null);
+        setCompany(companies[0] ?? null);
         setSolicitudes(requests.map(toSolicitud));
       })
       .catch(error => showToast(error instanceof Error ? error.message : "No fue posible cargar el portal."));
+  }, [accessToken]);
+
+  useEffect(() => {
+    setCasesState("loading");
+    setCasesError("");
+    void listMyCases(accessToken)
+      .then(rows => { setCases(rows); setCasesState("loaded"); })
+      .catch(error => {
+        setCasesError(error instanceof Error ? error.message : "No fue posible cargar tus evaluaciones.");
+        setCasesState("error");
+      });
   }, [accessToken]);
 
   const navigate = (tab: Tab) => {
@@ -711,6 +819,7 @@ export default function CompanyPortal({
     try {
       const result = await createAndSubmitRequest(accessToken, {
         companyId, establishmentType: sol.tipo, reason: sol.motivo, observations: sol.observaciones ?? "",
+        document: sol.document!,
       });
       const persisted = toSolicitud(result.request);
       setSolicitudes(prev => [persisted, ...prev]);
@@ -758,10 +867,10 @@ export default function CompanyPortal({
           {/* Company avatar */}
           <div style={{ padding: expanded?"22px 18px 16px":"20px 0 14px", display:"flex", alignItems:"center", gap:11, justifyContent: expanded?"flex-start":"center", borderBottom:"1px solid rgba(255,255,255,0.06)", flexShrink:0 }}>
             <div style={{ width:38, height:38, borderRadius:11, flexShrink:0, background:"linear-gradient(135deg,rgba(229,59,246,0.3),rgba(59,246,229,0.3))", borderTop:"1.5px solid rgba(229,59,246,0.5)", borderRight:"1.5px solid rgba(59,246,229,0.4)", borderBottom:"1.5px solid rgba(59,246,229,0.4)", borderLeft:"1.5px solid rgba(229,59,246,0.5)", display:"flex", alignItems:"center", justifyContent:"center" }}>
-              <span style={{ fontSize:"0.8rem", fontWeight:800, background:"linear-gradient(135deg,#E53BF6,#3BF6E5)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", backgroundClip:"text" }}>GC</span>
+              <span style={{ fontSize:"0.8rem", fontWeight:800, background:"linear-gradient(135deg,#E53BF6,#3BF6E5)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", backgroundClip:"text" }}>{(company?.tradeName ?? "?").slice(0,2).toUpperCase()}</span>
             </div>
             {expanded && <div style={{ minWidth:0 }}>
-              <p style={{ fontSize:"0.8rem", fontWeight:700, color:"#f1f5f9", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>García Constructores</p>
+              <p style={{ fontSize:"0.8rem", fontWeight:700, color:"#f1f5f9", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{company?.tradeName ?? "Portal Empresa"}</p>
               <p style={{ fontSize:"0.52rem", color:"rgba(148,163,184,0.3)", letterSpacing:"0.07em", textTransform:"uppercase" }}>Admin de Empresa</p>
             </div>}
           </div>
@@ -823,10 +932,7 @@ export default function CompanyPortal({
               </div>
             </div>
             <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-              <div style={{ display:"flex", alignItems:"center", gap:6, padding:"5px 11px", borderRadius:99, background:"rgba(34,197,94,0.08)", borderTop:"1px solid rgba(34,197,94,0.25)", borderRight:"1px solid rgba(34,197,94,0.25)", borderBottom:"1px solid rgba(34,197,94,0.25)", borderLeft:"1px solid rgba(34,197,94,0.25)" }}>
-                <span style={{ width:6, height:6, borderRadius:"50%", background:"#22c55e", boxShadow:"0 0 6px #22c55e", display:"inline-block", animation:"cpPulse 2.5s ease-in-out infinite" }}/>
-                <span style={{ fontSize:"0.6rem", fontWeight:700, color:"#22c55e", fontFamily:"Poppins, sans-serif" }}>Activo</span>
-              </div>
+              {accessToken && <NotificationsBell accessToken={accessToken} accent="#E53BF6" />}
               {isMobile && (
                 <button onClick={onBack} title="Cerrar sesión" style={{ width:36, height:36, borderRadius:10, background:"rgba(229,59,246,0.08)", border:"1px solid rgba(229,59,246,0.25)", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer" }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" stroke="#E53BF6" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -837,12 +943,12 @@ export default function CompanyPortal({
 
           {/* Content area */}
           <div key={activeTab} className="hide-scroll" style={{ flex:1, overflowY:"auto", padding: isMobile?"16px 14px 84px":"24px 28px 36px" }}>
-            {activeTab==="dashboard"       && <DashboardSection solicitudes={solicitudes} onNavigate={navigate} onToast={showToast}/>}
-            {activeTab==="nueva-solicitud" && <NuevaSolicitudSection onSubmit={handleFormSubmit} onCancel={()=>navigate("dashboard")}/>}
+            {activeTab==="dashboard"       && <DashboardSection solicitudes={solicitudes} cases={cases} company={company} onNavigate={navigate} onToast={showToast}/>}
+            {activeTab==="nueva-solicitud" && <NuevaSolicitudSection company={company} onSubmit={handleFormSubmit} onCancel={()=>navigate("dashboard")}/>}
             {activeTab==="solicitudes"     && <SolicitudesSection solicitudes={solicitudes} newId={newEntryId} onToast={showToast} onNavigate={navigate}/>}
-            {activeTab==="perfil"          && <PerfilSection isMobile={isMobile} onToast={showToast}/>}
-            {activeTab==="evaluaciones"    && <EvaluacionesSection onOpenReport={setSignedReport}/>}
-            {activeTab==="configuracion"   && <ConfiguracionSection onToast={showToast}/>}
+            {activeTab==="perfil"          && <PerfilSection isMobile={isMobile} onToast={showToast} accessToken={accessToken} companyId={companyId}/>}
+            {activeTab==="evaluaciones"    && <EvaluacionesSection cases={cases} state={casesState} error={casesError}/>}
+            {activeTab==="configuracion"   && <ConfiguracionSection userName={userName} onToast={showToast}/>}
           </div>
         </main>
 
@@ -873,8 +979,6 @@ export default function CompanyPortal({
             })}
           </div>
         )}
-
-        {signedReport && <ReportViewer report={signedReport.report} signature={signedReport.signature} canSign={false} onClose={()=>setSignedReport(null)} onToast={showToast}/>}
 
         {toast && (
           <div style={{ position:"fixed", bottom:isMobile?74:24, left:"50%", transform:"translateX(-50%)", zIndex:90, display:"flex", alignItems:"center", gap:10, padding:"12px 20px", borderRadius:14, whiteSpace:"nowrap", background:"rgba(8,14,28,0.97)", backdropFilter:"blur(24px)", borderTop:"1px solid rgba(59,246,229,0.4)", borderRight:"1px solid rgba(59,246,229,0.4)", borderBottom:"1px solid rgba(59,246,229,0.4)", borderLeft:"1px solid rgba(59,246,229,0.4)", boxShadow:"0 16px 48px rgba(0,0,0,0.6), 0 0 24px rgba(59,246,229,0.15)", animation:"cpToast 0.3s cubic-bezier(.22,1,.36,1) both" }}>

@@ -21,15 +21,13 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
     {
         var now = DateTimeOffset.UtcNow;
         var ruleVersion = await context.RiskRuleVersions
-            .Where(version => version.IsActive && version.EffectiveFrom <= now &&
+            .Where(version => version.IsPublished && version.IsActive && version.EffectiveFrom <= now &&
                 (version.EffectiveTo == null || version.EffectiveTo > now))
+            .Where(version => command.RuleVersionId == null || version.Id == command.RuleVersionId)
             .OrderByDescending(version => version.Version)
             .FirstOrDefaultAsync(cancellationToken);
-        if (ruleVersion is { IsPublished: false })
-        {
-            throw new InvalidOperationException(
-                "La versión vigente de reglas de riesgo no está publicada y no puede utilizarse.");
-        }
+        if (ruleVersion is null)
+            throw new InvalidOperationException("No existe una versión publicada y vigente de reglas de riesgo.");
 
         var subcategoryIds = await context.CompanyFoodSubcategories
             .Where(link => link.CompanyId == command.CompanyId)
@@ -38,9 +36,7 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
         if (subcategoryIds.Count == 0)
             throw new ArgumentException("La empresa no tiene subcategorías configuradas.", nameof(command));
 
-        var products = ruleVersion is null
-            ? await LegacyProductScoresAsync(subcategoryIds, cancellationToken)
-            : await HazardProductScoresAsync(subcategoryIds, ruleVersion, cancellationToken);
+        var products = await HazardProductScoresAsync(subcategoryIds, ruleVersion, cancellationToken);
         if (products.Count == 0)
         {
             throw new ArgumentException(
@@ -85,9 +81,7 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
 
         var snapshot = JsonSerializer.Serialize(new
         {
-            ruleVersion = ruleVersion is null
-                ? null
-                : new
+            ruleVersion = new
                 {
                     id = ruleVersion.Id,
                     version = ruleVersion.Version,
@@ -101,7 +95,7 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
         }, SnapshotJsonOptions);
         var calculation = new RiskCalculation
         {
-            RuleVersionId = ruleVersion?.Id,
+            RuleVersionId = ruleVersion.Id,
             CompanyId = command.CompanyId,
             CalculatedAt = now,
             ProductRisk = formula.ProductRisk,
@@ -127,20 +121,11 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
             calculation.FactorDetailsJson);
     }
 
-    private IQueryable<InspectionFrequencyMatrix> BandsOf(RiskRuleVersion? ruleVersion)
+    private IQueryable<InspectionFrequencyMatrix> BandsOf(RiskRuleVersion ruleVersion)
     {
-        if (ruleVersion is null) return context.InspectionFrequencyMatrices.Where(matrix => matrix.RuleVersionId == null);
         var ruleVersionId = ruleVersion.Id;
         return context.InspectionFrequencyMatrices.Where(matrix => matrix.RuleVersionId == ruleVersionId);
     }
-
-    private async Task<List<ProductSnapshot>> LegacyProductScoresAsync(
-        IReadOnlyList<int> subcategoryIds,
-        CancellationToken cancellationToken) =>
-        await context.FoodSubcategories
-            .Where(item => subcategoryIds.Contains(item.Id) && item.TotalScore > 0)
-            .Select(item => new ProductSnapshot(item.Id, item.Name, "TOTAL", item.TotalScore!.Value))
-            .ToListAsync(cancellationToken);
 
     private async Task<List<ProductSnapshot>> HazardProductScoresAsync(
         IReadOnlyList<int> subcategoryIds,
@@ -164,7 +149,7 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
 
     private async Task<List<FactorSnapshot>> BuildFactorSnapshotsAsync(
         RiskCalculationCommand command,
-        RiskRuleVersion? ruleVersion,
+        RiskRuleVersion ruleVersion,
         CancellationToken cancellationToken)
     {
         var selections = command.FactorSelections;
@@ -172,7 +157,6 @@ public sealed class RiskCalculationService(EbrDbContext context, IRiskFormulaSer
             throw new ArgumentException("Debe seleccionar al menos un factor.", nameof(command));
         if (selections.Select(selection => selection.FactorId).Distinct().Count() != selections.Count)
             throw new ArgumentException("No se permiten factores duplicados.", nameof(command));
-        if (ruleVersion is not null)
         {
             var required = await context.StructuralRiskFactors
                 .Where(factor => factor.RuleVersionId == ruleVersion.Id && factor.IsActive)

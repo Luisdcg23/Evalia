@@ -8,5 +8,6 @@ public sealed class CompanyRepresentative
     public required string DocumentNumber { get; set; }
     public required string Email { get; set; }
     public required string PhoneNumber { get; set; }
+    public required string RepresentativeType { get; set; }
     public bool IsActive { get; set; } = true;
 }

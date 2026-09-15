@@ -12,11 +12,11 @@ export default defineConfig({
   },
   server: {
     host: "0.0.0.0",
-    port: Number(process.env.PORT ?? 8443),
+    port: Number(process.env.PORT ?? 5183),
     strictPort: true,
   },
   preview: {
     host: "0.0.0.0",
-    port: Number(process.env.PORT ?? 8443),
+    port: Number(process.env.PORT ?? 5183),
   },
 });

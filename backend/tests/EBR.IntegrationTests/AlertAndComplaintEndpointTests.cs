@@ -50,6 +50,65 @@ public sealed class AlertAndComplaintEndpointTests : IClassFixture<EbrApiFactory
         Assert.Null(decision.CaseId);
     }
 
+    [Fact]
+    public async Task DecidingAlertAsNotProceedTwiceKeepsItClosedWithoutCreatingACase()
+    {
+        var token = await LoginAsync();
+        var company = Assert.Single(await GetAsync<List<IdResponse>>("/api/companies", token));
+        var alert = await PostAsync<IdResponse>("/api/alerts", new
+        {
+            alertNumber = $"LAPCH-{Guid.NewGuid():N}", receivedAt = DateTimeOffset.UtcNow,
+            product = "Producto C", companyId = company.Id, description = "Sin evidencia suficiente"
+        }, token);
+
+        var first = await PostAsync<DecisionResponse>($"/api/alerts/{alert.Id}/decision", new { result = "NOT_PROCEED", reason = "Sin evidencia" }, token);
+        var second = await PostAsync<DecisionResponse>($"/api/alerts/{alert.Id}/decision", new { result = "NOT_PROCEED", reason = "Sin evidencia" }, token);
+
+        Assert.Equal("NOT_PROCEED", first.Status);
+        Assert.Equal("NOT_PROCEED", second.Status);
+        Assert.Null(first.CaseId);
+        Assert.Null(second.CaseId);
+        Assert.Null((await GetAsync<List<CaseResponse>>("/api/cases", token)).SingleOrDefault(item => item.SourceType == "ALERT" && item.SourceReferenceId == alert.Id));
+    }
+
+    [Fact]
+    public async Task AlertClosedAsNotProceedCannotBeRedecidedAsProceed()
+    {
+        var token = await LoginAsync();
+        var company = Assert.Single(await GetAsync<List<IdResponse>>("/api/companies", token));
+        var alert = await PostAsync<IdResponse>("/api/alerts", new
+        {
+            alertNumber = $"LAPCH-{Guid.NewGuid():N}", receivedAt = DateTimeOffset.UtcNow,
+            product = "Producto D", companyId = company.Id, description = "Sin evidencia suficiente"
+        }, token);
+
+        await PostAsync<DecisionResponse>($"/api/alerts/{alert.Id}/decision", new { result = "NOT_PROCEED", reason = "Sin evidencia" }, token);
+        var attemptToReopen = await PostAsync<DecisionResponse>($"/api/alerts/{alert.Id}/decision", new { result = "PROCEED", reason = "Cambio de opinión" }, token);
+
+        Assert.Equal("NOT_PROCEED", attemptToReopen.Status);
+        Assert.Null(attemptToReopen.CaseId);
+    }
+
+    [Fact]
+    public async Task DecidingComplaintAsNotProceedTwiceKeepsItClosedWithoutCreatingACase()
+    {
+        var token = await LoginAsync();
+        var complaint = await PostAsync<IdResponse>("/api/complaints", new
+        {
+            complaintType = "Rotulado", receivedAt = DateTimeOffset.UtcNow,
+            complainant = "Ciudadano", description = "Denuncia sin fundamento"
+        }, token);
+
+        var first = await PostAsync<DecisionResponse>($"/api/complaints/{complaint.Id}/decision", new { result = "NOT_PROCEED", reason = "Sin fundamento" }, token);
+        var second = await PostAsync<DecisionResponse>($"/api/complaints/{complaint.Id}/decision", new { result = "NOT_PROCEED", reason = "Sin fundamento" }, token);
+
+        Assert.Equal("NOT_PROCEED", first.Status);
+        Assert.Equal("NOT_PROCEED", second.Status);
+        Assert.Null(first.CaseId);
+        Assert.Null(second.CaseId);
+        Assert.Null((await GetAsync<List<CaseResponse>>("/api/cases", token)).SingleOrDefault(item => item.SourceType == "COMPLAINT" && item.SourceReferenceId == complaint.Id));
+    }
+
     private async Task<string> LoginAsync()
     {
         using var response = await _client.PostAsJsonAsync("/api/auth/login", new { email = "admin@ebr.local", password = "EbrLocal2026!" });

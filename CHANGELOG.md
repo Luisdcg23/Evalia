@@ -8,13 +8,6 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
 
 ### Agregado
 
-- Informe de evaluación en PDF (jsPDF) para el técnico evaluador: «Generar» en
-  Pendientes de informe y «Completada · Generar informe» abren un visor con el
-  documento, que se puede imprimir o descargar. El pie lleva el recuadro
-  «Firma del técnico»; el diálogo «¿Firmar este informe?» pide el nombre en
-  cada firma y lo estampa en cursiva (fuente Mr Dafoe, OFL) junto al nombre
-  completo del usuario con sesión y la fecha. Coordinador y empresa solo
-  descargan el informe ya firmado; no vuelven a firmar.
 - Escalas de riesgo versionadas (riesgo de producto y frecuencia) y versiones
   de reglas de riesgo, con procedimiento transaccional para registrar un
   cálculo (`sp_registrar_calculo_riesgo`) y bloqueo de modificación sobre
@@ -34,6 +27,221 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
   y expedientes.
 - Perfil de usuario autenticado con las empresas realmente autorizadas para
   cada cuenta (`GET /api/users/me`, función `fn_perfil_usuario`).
+- Perfil completo de empresa (dirección, municipio, provincia, teléfono,
+  correo y actividad económica) con actualización mediante
+  `PUT /api/companies/{id}` protegida por control de concurrencia optimista
+  (token de versión) y con historial append-only de cambios
+  (`GET /api/companies/{id}/history`, disparador
+  `tr_empresa_historial_inmutable`).
+- Representantes de empresa tipados (legal, calidad, contacto principal), con
+  como máximo un representante activo por tipo y por empresa.
+- Metadatos de la carta de autorización como adjunto obligatorio del registro
+  de usuario (`POST /api/auth/register`), con catálogo cerrado de tipo de
+  documento y consulta para el administrador
+  (`GET /api/users/{id}/registration-documents`).
+- Metadatos de documentación obligatoria para solicitudes BPM
+  (`POST /api/bpm-requests/{id}/documents`, `GET /api/bpm-requests/{id}`), con
+  validación de presencia de al menos un documento antes de permitir el envío
+  de la solicitud. En ambos casos solo se guardan metadatos (nombre de
+  archivo, tipo MIME, tamaño, hash y referencia de almacenamiento); no se
+  persisten binarios.
+- Programación institucional de evaluaciones
+  (`POST /api/cases/institutional`, roles `ADMINISTRADOR` y `COORDINADOR`):
+  permite crear un expediente de inspección directamente, sin solicitud,
+  alerta ni denuncia previa, con motivo y observaciones obligatorios/
+  opcionales según el mismo patrón de los demás orígenes.
+- Asignación y reasignación de técnico evaluador a un expediente
+  (`POST /api/cases/{id}/assign`, rol `COORDINADOR`): valida que el técnico
+  tenga el rol Técnico Evaluador y esté activo, transiciona el caso de
+  pendiente de asignación a asignado en la primera asignación, y conserva el
+  historial completo de asignaciones sin duplicar la asignación vigente
+  (`GET /api/cases/{id}/assignments`), con procedimiento transaccional
+  `sp_asignar_tecnico`.
+- Programación y agenda de evaluaciones (RF-07, RF-11): programar, reprogramar y
+  cancelar la fecha de una evaluación con historial versionado
+  (`POST /api/cases/{id}/schedule`, `POST /api/cases/{id}/reschedule`,
+  `POST /api/cases/{id}/cancel-schedule`, `GET /api/cases/{id}/schedules`), con
+  validación de que el técnico asignado no tenga otra programación vigente que
+  se solape en el tiempo. Programar exige un técnico ya asignado y transiciona
+  el caso a programado; reprogramar y cancelar no cambian el estado del caso.
+  Consulta de agenda por rango de fechas con empresa, dirección, fecha y estado
+  (`GET /api/cases/schedule?from=&to=`), con procedimiento transaccional
+  `sp_programar_evaluacion`.
+- Ejecución de la evaluación en campo (RF-12, RF-13): instancia de evaluación
+  que congela la plantilla publicada y la versión de reglas de riesgo vigentes
+  al iniciarse (`POST /api/cases/{id}/evaluations`), captura de respuestas por
+  pregunta con guardado automático idempotente
+  (`PUT /api/evaluations/{id}/responses/{itemId}`), consulta de la instancia
+  con su progreso de captura (`GET /api/evaluations/{id}`) y envío que bloquea
+  la evaluación y transiciona el expediente a pendiente de informe
+  (`POST /api/evaluations/{id}/submit`). Las cuatro rutas son exclusivas del
+  rol Técnico Evaluador y validan la asignación vigente del expediente. Una
+  evaluación enviada es inmutable, garantizado también en la base con los
+  disparadores `tr_evaluacion_instancia_inmutable` y
+  `tr_evaluacion_respuesta_bloqueada`, con los procedimientos transaccionales
+  `sp_iniciar_evaluacion`, `sp_guardar_respuestas` y `sp_enviar_evaluacion`.
+- Cálculo BPM y riesgo integrado (RF-14): al enviar una evaluación se registra
+  una fotografía inmutable del resultado con el porcentaje BPM ponderado (que
+  excluye del denominador las preguntas marcadas No aplica), la calificación
+  declarada por la ficha, el conteo de no conformidades por severidad según la
+  criticidad de los criterios de guía, y el nivel de riesgo y la frecuencia de
+  inspección calculados con la versión de reglas congelada en la evaluación
+  (`GET /api/evaluations/{id}/result`). Publicar después otra versión de
+  reglas no altera resultados ya registrados, garantizado en la base con el
+  disparador `tr_evaluacion_resultado_inmutable`.
+- Revisión transaccional del informe (RF-17 y RF-18) mediante `sp_revisar_informe`, con decisiones
+  versionadas, observaciones de corrección e historial inmutable del expediente.
+- Informe oficial en PDF (RF-19) generado desde la última versión aprobada con resumen ejecutivo,
+  hallazgos, no conformidades por severidad con su criterio de guía, recomendaciones, resultado de
+  cumplimiento BPM y de riesgo, y referencias de las evidencias. La generación es determinista
+  (el mismo informe produce el mismo archivo salvo la fecha de generación) e idempotente; se registra
+  el hash SHA-256 y la fecha de emisión, y el binario se guarda en el almacenamiento de objetos.
+  Descarga autorizada a los roles con acceso al expediente
+  (`POST /api/evaluations/{id}/report/official`, `GET /api/evaluations/{id}/report/official/content`).
+- Cierre transaccional e inmutable del expediente (`POST /api/cases/{id}/close`) mediante
+  `sp_cerrar_expediente`, que exige estado aprobado, informe aprobado y PDF oficial emitido, deja el
+  expediente en `CLOSED` sin reapertura posible y conserva resultado, fecha y usuario.
+
+- Evidencias de la evaluación en campo: subida y descarga autorizadas
+  (`POST /api/evaluations/{id}/evidence`, `GET /api/evaluations/{id}/evidence`,
+  `GET /api/evaluations/{id}/evidence/{evidenciaId}/content`) sobre una
+  abstracción de almacenamiento de objetos con dos implementaciones, MinIO local
+  y sistema de archivos, seleccionadas por configuración. En PostgreSQL solo se
+  guardan los metadatos (nombre, tipo MIME, tamaño, hash SHA-256 calculado por el
+  servidor y clave del objeto); el binario nunca entra en la base. Se admiten
+  únicamente imágenes JPEG/PNG/WEBP y PDF hasta 15 MB, validado también con
+  restricciones de comprobación. Adjuntar es exclusivo del técnico asignado y
+  solo mientras la evaluación sigue abierta; consultar y descargar los añaden
+  Coordinador y Administrador. Los metadatos son inmutables
+  (`tr_evaluacion_evidencia_valida`, `tr_evaluacion_evidencia_inmutable`).
+
+- Captura en campo sin conexión: la aplicación se instala como PWA (manifiesto y
+  trabajador de servicio con el armazón en caché) y las respuestas capturadas se
+  guardan en una cola local en IndexedDB cuando la API no responde. La cola se
+  vacía al recuperar la red y la sincronización es idempotente por partida
+  doble: la clave de cada entrada es la pregunta —evaluación e ítem—, de modo
+  que reguardar reemplaza lo pendiente en lugar de acumular envíos, y la API
+  resuelve cada respuesta como alta o actualización sobre ese mismo par. Solo se
+  admite una sincronización en curso, y un envío fallido conserva la respuesta
+  para el siguiente intento. El trabajador de servicio no almacena nada de
+  `/api`: los datos del expediente se consultan siempre contra el servidor.
+
+- Informe de la evaluación versionado (`POST /api/evaluations/{id}/report`,
+  `GET /api/evaluations/{id}/report`, `GET /api/evaluations/{id}/report/versions`).
+  Emitirlo de nuevo tras una corrección crea la versión siguiente y conserva
+  intactas las anteriores: el informe es lo que se comunica al establecimiento y
+  una corrección no puede borrar lo ya emitido. Solo lo emite el técnico con la
+  asignación vigente del expediente y solo sobre una evaluación ya enviada;
+  Coordinador y Administrador consultan cualquier informe y el técnico únicamente
+  el de los expedientes que ha tenido asignados. Las cifras del BPM no se copian
+  en el informe: se leen del resultado inmutable de la evaluación. Las mismas
+  reglas viven en la base (`tr_evaluacion_informe_valido`,
+  `tr_evaluacion_informe_inmutable`).
+
+- Revisión del informe por el coordinador y gestión de correcciones
+  (`POST /api/evaluations/{id}/report/review`,
+  `GET /api/evaluations/{id}/report/reviews`). El coordinador aprueba, devuelve o
+  solicita corrección dejando observaciones, y el expediente avanza en
+  consecuencia: emitir el informe lo pone en revisión, devolverlo lo deja en
+  espera de corrección y reenviarlo corregido lo devuelve a revisión. El técnico
+  consulta las observaciones para corregir. Devolver sin observaciones se
+  rechaza, un informe aprobado no admite versión nueva y no se vuelve a revisar.
+  Las respuestas de campo siguen bloqueadas desde el envío: una corrección
+  corrige el informe, no la evaluación.
+
+- Consultas operativas por identidad autenticada en la interfaz: el panel de
+  cada rol (`GET /api/dashboard`), la bandeja de expedientes y la agenda del
+  técnico (`GET /api/me/cases`, `GET /api/me/schedule`), el listado de técnicos
+  evaluadores con su carga vigente para el coordinador (`GET /api/technicians`)
+  y la consulta histórica de expedientes con filtros de empresa, origen, estado
+  y fecha (`GET /api/cases/history/search`, RF-20). Cada vista distingue de
+  forma explícita los estados de carga, vacío y error.
+- La consulta histórica de expedientes (RF-20) incorpora, por cada expediente
+  del resultado, el informe oficial emitido (fecha de generación y hash
+  SHA-256) y la calificación registrada de la evaluación (porcentaje BPM,
+  clasificación de la ficha, nivel de riesgo y frecuencia de inspección). Es
+  información de solo lectura sobre tablas ya inmutables; el panel de consulta
+  histórica muestra ambas columnas.
+- Campana de notificaciones en los paneles de técnico, coordinador, empresa y
+  administración: contador de no leídas, lista desplegable y marcado como leída
+  persistido en el servidor (`GET /api/notifications`,
+  `PATCH /api/notifications/{id}/read`). El estado de lectura vive en el backend;
+  la interfaz solo lo refleja.
+
+### Agregado
+
+- Pantalla de administración de plantillas de evaluación: listar, crear una
+  plantilla, construir su árbol de ítems (capítulo, sección, subsección,
+  agrupador, pregunta) mientras está en borrador, publicarla (con
+  confirmación explícita, porque deja de poder editarse) y crear una nueva
+  versión editable a partir de una publicada.
+- Pantalla del técnico evaluador para ejecutar la evaluación en campo:
+  iniciar la instancia sobre un expediente asignado y programado, responder
+  cada pregunta con observaciones y comentarios (guardado automático),
+  adjuntar evidencias por pregunta, ver el avance en tiempo real, enviar la
+  evaluación y consultar de inmediato el resultado calculado (porcentaje
+  BPM, calificación, nivel de riesgo y frecuencia). La misma pantalla ofrece
+  el formulario para emitir el informe y, si el coordinador solicitó una
+  corrección, muestra sus observaciones y permite emitir la siguiente
+  versión.
+- Formularios reales de registro y decisión de alertas sanitarias y
+  denuncias en el panel del coordinador, reemplazando los formularios y
+  botones que antes solo mostraban un aviso sin efecto.
+- Formulario de programación institucional de evaluaciones (origen sin
+  solicitud, alerta ni denuncia previa) en el panel del coordinador.
+- Envío real de la programación de una evaluación (fecha, motivo,
+  observaciones) desde la pantalla de asignación del coordinador, con
+  reprogramar y cancelar sobre una programación vigente.
+- Pantalla de revisión del informe en el panel del coordinador: ver el
+  contenido del informe junto al resultado calculado de la evaluación, y
+  aprobar, devolver o solicitar corrección con observaciones. Una vez
+  aprobado, generar y descargar el informe oficial en PDF, y cerrar el
+  expediente.
+
+### Cambiado
+
+- Los paneles de técnico evaluador, coordinador, portal de empresa y
+  administración del sistema dejan de mostrar datos operativos simulados
+  (evaluaciones, agenda, técnicos, calendario, alertas, denuncias, solicitudes
+  de registro, métricas de tarjetas): ahora consumen la API real con el token de
+  sesión.
+- El perfil de empresa del portal (`PerfilSection`) carga los datos reales de la
+  empresa (`GET /api/companies/{id}`) y sus representantes tipados
+  (`GET /api/companies/{id}/representatives`), y guarda los cambios con
+  `PUT /api/companies/{id}` respetando el control de concurrencia optimista
+  (recarga y avisa ante un conflicto `409`).
+- La confirmación de asignación de técnico del panel del coordinador llama a
+  `POST /api/cases/{id}/assign` y refresca la lista de expedientes y las
+  métricas tras asignar, en lugar de solo actualizar el estado local.
+- El panel de administración deriva sus métricas y anillos de progreso de
+  `GET /api/dashboard` y `GET /api/cases`. Las series históricas agregadas por
+  mes y el repositorio de informes descargables a nivel de administración se
+  documentan como no disponibles: el backend no expone hoy un endpoint de
+  agregación histórica ni un catálogo de informes de administración.
+- Las altas de catálogos de riesgo (`/api/catalogs`) quedan enlazadas a una
+  versión de reglas: los peligros de subcategoría y las bandas de frecuencia
+  entran en la versión publicada vigente y los factores del establecimiento en
+  el borrador en curso, porque una versión publicada exige el juego completo
+  de factores con pesos que sumen 1. Con ello se eliminó la ruta de cálculo
+  heredada que operaba sobre `puntaje_total` sin versión de reglas: el motor
+  solo calcula contra una versión publicada y vigente.
+
+### Corregido
+
+- El inicio de una evaluación (`POST /api/cases/{id}/evaluations`) elegía la
+  plantilla publicada más recientemente en todo el sistema, sin distinguir
+  cuál es la ficha oficial vigente: cualquier plantilla de prueba publicada
+  después de ella pasaba a usarse por error. Se introduce un concepto
+  explícito de plantilla activa (`Plantilla_Activa`) y un nuevo endpoint
+  `POST /api/evaluation-templates/{id}/activate` (rol administrador) que la
+  marca; el criterio por fecha de publicación se elimina también del
+  procedimiento `sp_iniciar_evaluacion`.
+- Crear una plantilla de evaluación siembra automáticamente las cuatro
+  opciones evaluables estándar de la ficha BPM (Cumple / Cumplimiento parcial
+  / Incumplimiento total / No aplica), y publicarla valida que el número de
+  bandas de calificación declaradas coincida con el número de opciones del
+  factor de riesgo estructural BPM vigente, para evitar dejar publicada una
+  plantilla que no se pueda calificar al enviar una evaluación.
 
 ## [0.1.0] - 2026-09-08
 
