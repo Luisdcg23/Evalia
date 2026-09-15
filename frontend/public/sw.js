@@ -4,7 +4,7 @@
  * consultan siempre contra el servidor, y lo capturado sin red viaja por la cola local (IndexedDB),
  * no por respuestas almacenadas aquí. Servir una lectura vieja del expediente sería peor que fallar.
  */
-const CACHE = "evalia-shell-v1";
+const CACHE = "evalia-shell-v2";
 const SHELL = ["/", "/index.html", "/manifest.webmanifest", "/icono-192.png", "/icono-512.png"];
 
 self.addEventListener("install", event => {
