@@ -164,7 +164,7 @@ public sealed class OperationalReadEndpointTests : IClassFixture<EbrApiFactory>
             {
                 EvaluationInstanceId = instance.Id, Version = 1, Status = EvaluationReportStatuses.Issued,
                 ExecutiveSummary = "Resumen", Findings = "Hallazgos", Recommendations = "Recomendaciones",
-                CreatedBy = actor
+                SignatureName = "T. Evaluador", CreatedBy = actor
             };
             db.EvaluationReports.Add(report);
             await db.SaveChangesAsync();

@@ -13,6 +13,8 @@ public sealed record OfficialReportEvidence(string FileName, string Sha256, long
 /// Datos ya persistidos que componen el informe oficial de una evaluación (RF-19). Todo proviene de
 /// filas inmutables (<c>Evaluacion_Informe</c>, <c>Evaluacion_Resultado</c>,
 /// <c>Evaluacion_No_Conformidad</c>, <c>Evaluacion_Evidencia</c>); el renderizador no calcula nada.
+/// El documento lleva las dos firmas del expediente: la del técnico que lo emitió y la del
+/// coordinador que lo aprobó, cada una con la rúbrica escrita y el nombre registrado de quien firmó.
 /// </summary>
 public sealed record OfficialReportContent(
     int EvaluationInstanceId,
@@ -35,7 +37,14 @@ public sealed record OfficialReportContent(
     IReadOnlyList<OfficialReportEvidence> Evidences,
     DateTimeOffset ReportIssuedAt,
     DateTimeOffset GeneratedAt,
-    string ApproverFullName);
+    string ApproverFullName,
+    /// <summary>Rúbrica que escribió el coordinador al aprobar; se imprime en cursiva.</summary>
+    string ApproverSignatureName,
+    DateTimeOffset ApprovedAt,
+    /// <summary>Nombre registrado del técnico que emitió la versión, como aclaración de su firma.</summary>
+    string TechnicianFullName,
+    /// <summary>Rúbrica que escribió el técnico al emitir; se imprime en cursiva.</summary>
+    string TechnicianSignatureName);
 
 /// <summary>PDF renderizado y el hash SHA-256 de su contenido lógico, estable entre generaciones.</summary>
 public sealed record RenderedOfficialReport(byte[] Content, string ContentSha256);

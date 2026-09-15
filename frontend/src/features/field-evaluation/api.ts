@@ -114,6 +114,8 @@ export interface EvaluationReport {
   executiveSummary: string;
   findings: string;
   recommendations: string;
+  /** Rúbrica que escribió el técnico al emitir; se estampa en cursiva en el PDF oficial. */
+  signatureName: string;
   createdAt: string;
   createdBy: string;
 }
@@ -124,6 +126,8 @@ export interface EvaluationReportReview {
   reportVersion: number;
   decision: "APPROVED" | "RETURNED" | "CORRECTION_REQUESTED" | string;
   observations: string;
+  /** Rúbrica del coordinador; solo la aprobación se firma, las demás decisiones la dejan nula. */
+  signatureName: string | null;
   reviewedAt: string;
   reviewedBy: string;
 }
@@ -297,6 +301,8 @@ export interface IssueReportInput {
   executiveSummary: string;
   findings: string;
   recommendations: string;
+  /** Rúbrica escrita por el técnico. El backend la exige: emitir el informe es firmarlo. */
+  signatureName: string;
 }
 
 /** Emite una versión nueva del informe (RF-16); si el caso ya está en revisión, no cambia de estado. */
@@ -312,6 +318,7 @@ export async function issueReport(
       executiveSummary: input.executiveSummary.trim(),
       findings: input.findings.trim(),
       recommendations: input.recommendations.trim(),
+      signatureName: input.signatureName.trim(),
     }),
   });
   if (!response.ok) {
@@ -356,12 +363,17 @@ export type ReportReviewDecision = (typeof REPORT_REVIEW_DECISIONS)[number];
 export async function reviewReport(
   accessToken: string,
   evaluationId: number,
-  input: { decision: ReportReviewDecision; observations?: string },
+  input: { decision: ReportReviewDecision; observations?: string; signatureName?: string },
 ): Promise<EvaluationReportReview> {
   const response = await fetch(`${baseUrl}/api/evaluations/${evaluationId}/report/review`, {
     method: "POST",
     headers: jsonHeaders(accessToken),
-    body: JSON.stringify({ decision: input.decision, observations: input.observations?.trim() ?? "" }),
+    body: JSON.stringify({
+      decision: input.decision,
+      observations: input.observations?.trim() ?? "",
+      // Solo la aprobación se firma; el backend descarta la rúbrica en las demás decisiones.
+      signatureName: input.decision === "APPROVED" ? (input.signatureName?.trim() ?? "") : null,
+    }),
   });
   if (!response.ok) {
     if (response.status === 409) {

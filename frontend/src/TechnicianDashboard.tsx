@@ -213,9 +213,10 @@ function fieldActionFor(status: string): { label: string; enabled: boolean } {
 }
 
 function CampoSection({
-  cases, state, error, accessToken, onCaseChanged,
+  cases, state, error, accessToken, userName, onCaseChanged,
 }: {
-  cases: MyCaseRow[]; state: LoadState; error: string; accessToken: string; onCaseChanged: () => void | Promise<void>;
+  cases: MyCaseRow[]; state: LoadState; error: string; accessToken: string; userName: string;
+  onCaseChanged: () => void | Promise<void>;
 }) {
   const [selectedCaseId, setSelectedCaseId] = useState<number | null>(null);
   const selected = cases.find(row => row.id === selectedCaseId) ?? null;
@@ -225,6 +226,7 @@ function CampoSection({
       <FieldEvaluationScreen
         accessToken={accessToken}
         caseRow={selected}
+        userName={userName}
         onExit={() => setSelectedCaseId(null)}
         onCaseChanged={onCaseChanged}
       />
@@ -523,7 +525,7 @@ export default function TechnicianDashboard({
           <div key={section} className="hide-scroll" style={{ flex: 1, overflowY: "auto", padding: isMobile ? "16px 14px 84px" : "24px 28px 36px" }}>
             {section === "inicio" && <InicioSection cases={cases} schedule={schedule} state={state} error={error} />}
             {section === "evaluaciones" && <EvaluacionesSection cases={cases} state={state} error={error} />}
-            {section === "campo" && <CampoSection cases={cases} state={state} error={error} accessToken={accessToken} onCaseChanged={load} />}
+            {section === "campo" && <CampoSection cases={cases} state={state} error={error} accessToken={accessToken} userName={userName} onCaseChanged={load} />}
             {section === "calendario" && <CalendarioSection schedule={schedule} state={state} error={error} />}
             {section === "reportes" && <ReportesSection cases={cases} state={state} error={error} />}
             {section === "configuracion" && <ConfiguracionSection userName={userName} onToast={showToast} />}

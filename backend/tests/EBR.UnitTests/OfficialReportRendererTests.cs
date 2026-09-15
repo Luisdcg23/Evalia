@@ -42,7 +42,11 @@ public sealed class OfficialReportRendererTests
         ],
         ReportIssuedAt: new DateTimeOffset(2026, 9, 1, 14, 30, 0, TimeSpan.Zero),
         GeneratedAt: generatedAt,
-        ApproverFullName: "Coordinadora de Prueba");
+        ApproverFullName: "Coordinadora de Prueba",
+        ApproverSignatureName: "C. de Prueba",
+        ApprovedAt: new DateTimeOffset(2026, 9, 3, 9, 15, 0, TimeSpan.Zero),
+        TechnicianFullName: "Tecnico de Prueba",
+        TechnicianSignatureName: "T. de Prueba");
 
     private static readonly OfficialReportRenderer Renderer = new();
 
@@ -97,5 +101,31 @@ public sealed class OfficialReportRendererTests
 
         var otherApprover = SampleContent(DateTimeOffset.UtcNow) with { ApproverFullName = "Otro Coordinador" };
         Assert.NotEqual(baseline.ContentSha256, Renderer.Render(otherApprover).ContentSha256);
+    }
+
+    /// <summary>
+    /// La firma RSA del PDF solo protege lo que entró en la cadena canónica, así que las dos rúbricas
+    /// y las dos fechas tienen que alterar el hash: si no, se podrían reescribir en el documento sin
+    /// que la verificación lo notara.
+    /// </summary>
+    [Fact]
+    public void ChangingEitherWrittenSignatureChangesTheContentHash()
+    {
+        var baseline = Renderer.Render(SampleContent(DateTimeOffset.UtcNow));
+
+        var otherTechnicianRubric = SampleContent(DateTimeOffset.UtcNow) with { TechnicianSignatureName = "Otra Rubrica" };
+        Assert.NotEqual(baseline.ContentSha256, Renderer.Render(otherTechnicianRubric).ContentSha256);
+
+        var otherTechnician = SampleContent(DateTimeOffset.UtcNow) with { TechnicianFullName = "Otro Tecnico" };
+        Assert.NotEqual(baseline.ContentSha256, Renderer.Render(otherTechnician).ContentSha256);
+
+        var otherApproverRubric = SampleContent(DateTimeOffset.UtcNow) with { ApproverSignatureName = "Otra Rubrica" };
+        Assert.NotEqual(baseline.ContentSha256, Renderer.Render(otherApproverRubric).ContentSha256);
+
+        var otherApprovalDate = SampleContent(DateTimeOffset.UtcNow) with
+        {
+            ApprovedAt = new DateTimeOffset(2026, 12, 25, 0, 0, 0, TimeSpan.Zero)
+        };
+        Assert.NotEqual(baseline.ContentSha256, Renderer.Render(otherApprovalDate).ContentSha256);
     }
 }

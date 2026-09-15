@@ -8,6 +8,14 @@ El formato sigue las convenciones de [Keep a Changelog](https://keepachangelog.c
 
 ### Agregado
 
+- Firma escrita de las dos partes en el informe oficial: el técnico firma al
+  emitirlo y el coordinador al aprobarlo, cada uno escribiendo su rúbrica, que
+  se estampa en cursiva (Alex Brush, OFL) sobre una línea con su nombre
+  registrado debajo como aclaración. Las dos rúbricas y las dos fechas entran
+  en la cadena canónica del documento, así que la firma RSA-2048 del PDF las
+  cubre y alterarlas invalida la verificación. Devolver o solicitar corrección
+  no se firma. La pantalla de emisión y la de revisión previsualizan la rúbrica
+  en la misma fuente del documento antes de confirmarla.
 - Escalas de riesgo versionadas (riesgo de producto y frecuencia) y versiones
   de reglas de riesgo, con procedimiento transaccional para registrar un
   cálculo (`sp_registrar_calculo_riesgo`) y bloqueo de modificación sobre

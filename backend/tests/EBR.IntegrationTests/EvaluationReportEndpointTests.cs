@@ -41,7 +41,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         {
             executiveSummary = "El establecimiento cumple parcialmente con las condiciones evaluadas.",
             findings = "Se observó ausencia de registros de limpieza en el área de empaque.",
-            recommendations = "Implementar bitácora diaria de limpieza y capacitar al personal."
+            recommendations = "Implementar bitácora diaria de limpieza y capacitar al personal.",
+            signatureName = "A. Perez"
         }, scenario.TechnicianToken);
 
         Assert.Equal(1, report.Version);
@@ -59,7 +60,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         {
             executiveSummary = "Resumen prematuro.",
             findings = "Hallazgos prematuros.",
-            recommendations = "Recomendaciones prematuras."
+            recommendations = "Recomendaciones prematuras.",
+            signatureName = "A. Perez"
         }, scenario.TechnicianToken);
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
@@ -77,7 +79,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         {
             executiveSummary = "Resumen de un técnico ajeno.",
             findings = "Hallazgos de un técnico ajeno.",
-            recommendations = "Recomendaciones de un técnico ajeno."
+            recommendations = "Recomendaciones de un técnico ajeno.",
+            signatureName = "A. Perez"
         }, otherToken);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -92,14 +95,16 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         {
             executiveSummary = "Resumen inicial.",
             findings = "Hallazgos iniciales.",
-            recommendations = "Recomendaciones iniciales."
+            recommendations = "Recomendaciones iniciales.",
+            signatureName = "A. Perez"
         }, scenario.TechnicianToken);
 
         var corrected = await PostJsonAsync<ReportResponse>($"/api/evaluations/{scenario.InstanceId}/report", new
         {
             executiveSummary = "Resumen corregido.",
             findings = "Hallazgos corregidos.",
-            recommendations = "Recomendaciones corregidas."
+            recommendations = "Recomendaciones corregidas.",
+            signatureName = "A. Perez"
         }, scenario.TechnicianToken);
 
         Assert.Equal(2, corrected.Version);
@@ -121,14 +126,16 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         {
             executiveSummary = "Resumen inicial.",
             findings = "Hallazgos iniciales.",
-            recommendations = "Recomendaciones iniciales."
+            recommendations = "Recomendaciones iniciales.",
+            signatureName = "A. Perez"
         }, scenario.TechnicianToken);
 
         await PostJsonAsync<ReportResponse>($"/api/evaluations/{scenario.InstanceId}/report", new
         {
             executiveSummary = "Resumen corregido.",
             findings = "Hallazgos corregidos.",
-            recommendations = "Recomendaciones corregidas."
+            recommendations = "Recomendaciones corregidas.",
+            signatureName = "A. Perez"
         }, scenario.TechnicianToken);
 
         var current = await GetJsonAsync<ReportResponse>(
@@ -146,7 +153,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         {
             executiveSummary = "Resumen inicial.",
             findings = "Hallazgos iniciales.",
-            recommendations = "Recomendaciones iniciales."
+            recommendations = "Recomendaciones iniciales.",
+            signatureName = "A. Perez"
         }, scenario.TechnicianToken);
 
         var otherEmail = $"tecnico-lectura-{Guid.NewGuid():N}@ebr.local";
@@ -166,7 +174,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         {
             executiveSummary = "Resumen inicial.",
             findings = "Hallazgos iniciales.",
-            recommendations = "Recomendaciones iniciales."
+            recommendations = "Recomendaciones iniciales.",
+            signatureName = "A. Perez"
         }, scenario.TechnicianToken);
 
         var inspectionCase = await GetJsonAsync<CaseResponse>($"/api/cases/{scenario.CaseId}", scenario.CoordinatorToken);
@@ -183,7 +192,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         var review = await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
         {
             decision = "APPROVED",
-            observations = "El informe refleja lo observado en la visita."
+            observations = "El informe refleja lo observado en la visita.",
+            signatureName = "L. de la Cruz"
         }, scenario.CoordinatorToken);
 
         Assert.Equal("APPROVED", review.Decision);
@@ -316,14 +326,16 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
         {
             decision = "APPROVED",
-            observations = "El informe refleja lo observado en la visita."
+            observations = "El informe refleja lo observado en la visita.",
+            signatureName = "L. de la Cruz"
         }, scenario.CoordinatorToken);
 
         using var response = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report", new
         {
             executiveSummary = "Resumen posterior a la aprobación.",
             findings = "Hallazgos posteriores a la aprobación.",
-            recommendations = "Recomendaciones posteriores a la aprobación."
+            recommendations = "Recomendaciones posteriores a la aprobación.",
+            signatureName = "A. Perez"
         }, scenario.TechnicianToken);
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
@@ -342,7 +354,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         using var response = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report/review", new
         {
             decision = "APPROVED",
-            observations = "Autoaprobación indebida."
+            observations = "Autoaprobación indebida.",
+            signatureName = "L. de la Cruz"
         }, scenario.TechnicianToken);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -356,7 +369,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
         {
             decision = "APPROVED",
-            observations = "El informe refleja lo observado en la visita."
+            observations = "El informe refleja lo observado en la visita.",
+            signatureName = "L. de la Cruz"
         }, scenario.CoordinatorToken);
 
         using var response = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report/review", new
@@ -384,7 +398,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
         {
             decision = "APPROVED",
-            observations = "Informe aprobado para emisión oficial."
+            observations = "Informe aprobado para emisión oficial.",
+            signatureName = "L. de la Cruz"
         }, scenario.CoordinatorToken);
 
         var official = await PostJsonAsync<OfficialReportResponse>(
@@ -414,7 +429,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
         {
             decision = "APPROVED",
-            observations = "Informe aprobado para verificación de firma."
+            observations = "Informe aprobado para verificación de firma.",
+            signatureName = "L. de la Cruz"
         }, scenario.CoordinatorToken);
         var official = await PostJsonAsync<OfficialReportResponse>(
             $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
@@ -438,7 +454,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
         {
             decision = "APPROVED",
-            observations = "Informe aprobado."
+            observations = "Informe aprobado.",
+            signatureName = "L. de la Cruz"
         }, scenario.CoordinatorToken);
         await PostJsonAsync<OfficialReportResponse>(
             $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
@@ -473,7 +490,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
         {
             decision = "APPROVED",
-            observations = "Informe aprobado."
+            observations = "Informe aprobado.",
+            signatureName = "L. de la Cruz"
         }, scenario.CoordinatorToken);
 
         using (var beforePdf = await SendAsync(HttpMethod.Post, $"/api/cases/{scenario.CaseId}/close",
@@ -508,7 +526,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
         {
             decision = "APPROVED",
-            observations = "Informe aprobado para emisión oficial."
+            observations = "Informe aprobado para emisión oficial.",
+            signatureName = "L. de la Cruz"
         }, scenario.CoordinatorToken);
         await PostJsonAsync<OfficialReportResponse>(
             $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
@@ -531,7 +550,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
         {
             decision = "APPROVED",
-            observations = "Informe aprobado para emisión oficial."
+            observations = "Informe aprobado para emisión oficial.",
+            signatureName = "L. de la Cruz"
         }, scenario.CoordinatorToken);
 
         var first = await PostJsonAsync<OfficialReportResponse>(
@@ -552,7 +572,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
         {
             decision = "APPROVED",
-            observations = "Informe aprobado."
+            observations = "Informe aprobado.",
+            signatureName = "L. de la Cruz"
         }, scenario.CoordinatorToken);
         await PostJsonAsync<OfficialReportResponse>(
             $"/api/evaluations/{scenario.InstanceId}/report/official", null, scenario.CoordinatorToken);
@@ -563,7 +584,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         {
             executiveSummary = "Resumen posterior al cierre.",
             findings = "Hallazgos posteriores al cierre.",
-            recommendations = "Recomendaciones posteriores al cierre."
+            recommendations = "Recomendaciones posteriores al cierre.",
+            signatureName = "A. Perez"
         }, scenario.TechnicianToken);
         Assert.Equal(HttpStatusCode.Conflict, newVersion.StatusCode);
 
@@ -583,7 +605,8 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
         {
             executiveSummary = $"Resumen {label}.",
             findings = $"Hallazgos {label}.",
-            recommendations = $"Recomendaciones {label}."
+            recommendations = $"Recomendaciones {label}.",
+            signatureName = "A. Perez"
         }, scenario.TechnicianToken);
 
     private async Task<EvaluationScenario> SubmitEvaluationAsync(int questionCount)
@@ -814,14 +837,99 @@ public sealed class EvaluationReportEndpointTests : IClassFixture<EbrApiFactory>
     private sealed record InstanceResponse(int Id, int CaseId, int TemplateId, string Status);
     private sealed record ResponseResponse(int Id, int EvaluationInstanceId, int TemplateItemId, string OptionCode);
 
+    /// <summary>
+    /// Emitir es firmar: la rúbrica que escribe el técnico es lo que se estampa en el PDF oficial, así
+    /// que un informe sin ella no llega a existir.
+    /// </summary>
+    [Fact]
+    public async Task IssuingTheReportWithoutASignatureIsRejected()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+
+        using var response = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report", new
+        {
+            executiveSummary = "Resumen sin firmar.",
+            findings = "Hallazgos sin firmar.",
+            recommendations = "Recomendaciones sin firmar.",
+            signatureName = "   "
+        }, scenario.TechnicianToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    /// <summary>La rúbrica se conserva literal: es lo que el técnico escribió, no su nombre de usuario.</summary>
+    [Fact]
+    public async Task TheReportKeepsTheSignatureTheTechnicianWrote()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+
+        var report = await PostJsonAsync<ReportResponse>($"/api/evaluations/{scenario.InstanceId}/report", new
+        {
+            executiveSummary = "Resumen firmado.",
+            findings = "Hallazgos firmados.",
+            recommendations = "Recomendaciones firmadas.",
+            signatureName = "  A. Perez  "
+        }, scenario.TechnicianToken);
+
+        Assert.Equal("A. Perez", report.SignatureName);
+    }
+
+    /// <summary>Aprobar estampa la segunda rúbrica del documento, así que también la exige.</summary>
+    [Fact]
+    public async Task ApprovingTheReportWithoutASignatureIsRejected()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await PostJsonAsync<ReportResponse>($"/api/evaluations/{scenario.InstanceId}/report", new
+        {
+            executiveSummary = "Resumen inicial.",
+            findings = "Hallazgos iniciales.",
+            recommendations = "Recomendaciones iniciales.",
+            signatureName = "A. Perez"
+        }, scenario.TechnicianToken);
+
+        using var response = await SendAsync(HttpMethod.Post, $"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "APPROVED",
+            observations = "El informe refleja la visita."
+        }, scenario.CoordinatorToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    /// <summary>
+    /// Devolver el informe no estampa nada en el documento, así que no se firma: la rúbrica que llegue
+    /// en una devolución se descarta en vez de guardarse.
+    /// </summary>
+    [Fact]
+    public async Task ReturningTheReportRecordsNoSignature()
+    {
+        var scenario = await SubmitEvaluationAsync(2);
+        await PostJsonAsync<ReportResponse>($"/api/evaluations/{scenario.InstanceId}/report", new
+        {
+            executiveSummary = "Resumen inicial.",
+            findings = "Hallazgos iniciales.",
+            recommendations = "Recomendaciones iniciales.",
+            signatureName = "A. Perez"
+        }, scenario.TechnicianToken);
+
+        var review = await PostJsonAsync<ReviewResponse>($"/api/evaluations/{scenario.InstanceId}/report/review", new
+        {
+            decision = "CORRECTION_REQUESTED",
+            observations = "Falta describir el hallazgo del área de empaque.",
+            signatureName = "L. de la Cruz"
+        }, scenario.CoordinatorToken);
+
+        Assert.Null(review.SignatureName);
+    }
+
     private sealed record ReviewResponse(
         int Id, int ReportId, int ReportVersion, string Decision, string Observations,
-        DateTimeOffset ReviewedAt, Guid ReviewedBy);
+        string? SignatureName, DateTimeOffset ReviewedAt, Guid ReviewedBy);
 
     private sealed record ReportResponse(
         int Id, int EvaluationInstanceId, int Version, string Status,
         string ExecutiveSummary, string Findings, string Recommendations,
-        DateTimeOffset CreatedAt, Guid CreatedBy);
+        string SignatureName, DateTimeOffset CreatedAt, Guid CreatedBy);
 
     private sealed record OfficialReportResponse(
         int Id, int EvaluationInstanceId, int ReportId, int ReportVersion, string FileName,

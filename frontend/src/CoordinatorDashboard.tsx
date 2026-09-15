@@ -14,6 +14,7 @@ import {
 } from "./features/field-evaluation/api";
 import NotificationsBell from "./features/notifications/NotificationsBell";
 import CaseHistoryPanel from "./features/history/CaseHistoryPanel";
+import SignatureField from "./features/reports/SignatureField";
 
 /* ── Backend → UI mappers (Alertas / Denuncias) ───────────────────────
    El backend guarda el resultado de la decisión y el estado de trámite
@@ -1037,8 +1038,9 @@ const REPORT_STATUS_LABEL: Record<string,string> = {
   CORRECTION_REQUESTED: "Corrección solicitada",
 };
 
-function ReportReviewDetail({ caso, accessToken, onBack, onToast, onRefresh }: {
-  caso: Caso; accessToken: string; onBack: ()=>void; onToast:(m:string)=>void; onRefresh:()=>Promise<void>;
+function ReportReviewDetail({ caso, accessToken, userName, onBack, onToast, onRefresh }: {
+  caso: Caso; accessToken: string; userName: string;
+  onBack: ()=>void; onToast:(m:string)=>void; onRefresh:()=>Promise<void>;
 }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -1049,6 +1051,7 @@ function ReportReviewDetail({ caso, accessToken, onBack, onToast, onRefresh }: {
   const [official, setOfficial] = useState<OfficialReport|null>(null);
   const [acting, setActing] = useState(false);
   const [observations, setObservations] = useState("");
+  const [signatureName, setSignatureName] = useState("");
   const [closeResult, setCloseResult] = useState("");
   const [confirmingClose, setConfirmingClose] = useState(false);
 
@@ -1084,14 +1087,19 @@ function ReportReviewDetail({ caso, accessToken, onBack, onToast, onRefresh }: {
       onToast("Las observaciones son obligatorias para devolver el informe o pedir corrección.");
       return;
     }
+    // Aprobar estampa la rúbrica del coordinador en el PDF oficial; devolver no firma nada.
+    if (decision === "APPROVED" && !signatureName.trim()) {
+      onToast("Escribe tu firma para aprobar el informe.");
+      return;
+    }
     setActing(true);
     try {
-      await reviewReport(accessToken, evaluationId, { decision, observations });
+      await reviewReport(accessToken, evaluationId, { decision, observations, signatureName });
       onToast(decision === "APPROVED" ? "Informe aprobado" : "Informe devuelto al técnico");
       const [reportData, reviewsData] = await Promise.all([
         getCurrentReport(accessToken, evaluationId), listReportReviews(accessToken, evaluationId),
       ]);
-      setReport(reportData); setReviews(reviewsData); setObservations("");
+      setReport(reportData); setReviews(reviewsData); setObservations(""); setSignatureName("");
       await onRefresh();
     } catch (err) {
       onToast(err instanceof Error ? err.message : "No fue posible registrar la revisión.");
@@ -1221,6 +1229,14 @@ function ReportReviewDetail({ caso, accessToken, onBack, onToast, onRefresh }: {
               <div><label style={fieldLabelStyle}>Observaciones (obligatorias para devolver o pedir corrección)</label>
                 <textarea value={observations} onChange={e=>setObservations(e.target.value)} rows={3} style={{ ...fieldBoxStyle, resize:"vertical" }}/>
               </div>
+              <SignatureField
+                label="Firma del coordinador (solo para aprobar)"
+                value={signatureName}
+                onChange={setSignatureName}
+                signerFullName={userName}
+                role="Coordinador · Evaluación Basada en Riesgo"
+                disabled={acting}
+              />
               <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
                 <button onClick={()=>handleDecision("APPROVED")} disabled={acting} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:acting?"not-allowed":"pointer", opacity:acting?0.7:1, background:"rgba(34,197,94,0.12)", borderTop:"1px solid rgba(34,197,94,0.4)", borderRight:"1px solid rgba(34,197,94,0.4)", borderBottom:"1px solid rgba(34,197,94,0.4)", borderLeft:"1px solid rgba(34,197,94,0.4)", color:"#22c55e", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Aprobar</button>
                 <button onClick={()=>handleDecision("RETURNED")} disabled={acting} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:acting?"not-allowed":"pointer", opacity:acting?0.7:1, background:"rgba(246,229,59,0.1)", borderTop:"1px solid rgba(246,229,59,0.38)", borderRight:"1px solid rgba(246,229,59,0.38)", borderBottom:"1px solid rgba(246,229,59,0.38)", borderLeft:"1px solid rgba(246,229,59,0.38)", color:"#F6E53B", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Devolver</button>
@@ -1260,8 +1276,8 @@ function ReportReviewDetail({ caso, accessToken, onBack, onToast, onRefresh }: {
   );
 }
 
-function ReportesSection({ casos, loading, error, accessToken, onToast, onRefresh }:{
-  casos:Caso[]; loading:boolean; error:string; accessToken:string;
+function ReportesSection({ casos, loading, error, accessToken, userName, onToast, onRefresh }:{
+  casos:Caso[]; loading:boolean; error:string; accessToken:string; userName:string;
   onToast:(m:string)=>void; onRefresh:()=>Promise<void>;
 }) {
   const [selectedId, setSelectedId] = useState<number|null>(null);
@@ -1271,7 +1287,7 @@ function ReportesSection({ casos, loading, error, accessToken, onToast, onRefres
 
   const selected = selectedId != null ? casos.find(c => c.rawId === selectedId) ?? null : null;
   if (selected) {
-    return <ReportReviewDetail caso={selected} accessToken={accessToken} onBack={()=>setSelectedId(null)} onToast={onToast} onRefresh={onRefresh}/>;
+    return <ReportReviewDetail caso={selected} accessToken={accessToken} userName={userName} onBack={()=>setSelectedId(null)} onToast={onToast} onRefresh={onRefresh}/>;
   }
 
   return (
@@ -1576,7 +1592,7 @@ export default function CoordinatorDashboard({
             {section==="asignaciones"  && <AsignacionesSection casos={casos} onOpenCaso={openCaso}/>}
             {section==="asignar-caso"  && selectedCaso && <AsignarCasoSection caso={selectedCaso} technicians={technicians} onConfirm={handleConfirmAssignment} onBack={()=>navigate("asignaciones")}/>}
             {section==="confirmacion"  && selectedCaso && confirmedTech && <ConfirmacionSection caso={selectedCaso} tecnico={confirmedTech} onGoAsignaciones={()=>navigate("asignaciones")} onGoInicio={()=>navigate("inicio")}/>}
-            {section==="reportes"      && <ReportesSection casos={casos} loading={casesLoading} error={casesError} accessToken={accessToken} onToast={showToast} onRefresh={refreshCasesAndMetrics}/>}
+            {section==="reportes"      && <ReportesSection casos={casos} loading={casesLoading} error={casesError} accessToken={accessToken} userName={userName} onToast={showToast} onRefresh={refreshCasesAndMetrics}/>}
             {section==="historico"     && <CaseHistoryPanel accessToken={accessToken}/>}
             {section==="configuracion" && <ConfiguracionSection userName={userName} onToast={showToast}/>}
           </div>

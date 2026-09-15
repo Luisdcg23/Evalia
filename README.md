@@ -72,13 +72,13 @@ Todos los pasos usan las cuentas de demostración de la sección "Usuarios local
 
 **RF-15 — Evidencias.** Se adjuntan fotografías (JPEG/PNG/WEBP) o documentos PDF de hasta 15 MB directamente sobre cada pregunta en la pantalla de "Evaluación en campo", incluso sin conexión (se sincronizan al reconectar).
 
-**RF-16 — Informe de evaluación.** Tras calcular el resultado, la misma pantalla del técnico ofrece el formulario de informe (resumen ejecutivo, hallazgos, recomendaciones) para emitirlo.
+**RF-16 — Informe de evaluación.** Tras calcular el resultado, la misma pantalla del técnico ofrece el formulario de informe (resumen ejecutivo, hallazgos, recomendaciones) y el campo de firma para emitirlo. Emitir es firmar: el técnico escribe su rúbrica, la previsualiza en la misma fuente cursiva con la que se estampará en el PDF y confirma. Cada versión se firma de nuevo.
 
-**RF-17 — Revisión del coordinador.** Panel de Coordinador → "Reportes": abre un expediente en revisión, ve el informe y el resultado calculado, y decide aprobar, devolver o solicitar corrección (con observaciones).
+**RF-17 — Revisión del coordinador.** Panel de Coordinador → "Reportes": abre un expediente en revisión, ve el informe y el resultado calculado, y decide aprobar, devolver o solicitar corrección (con observaciones). Aprobar exige su firma escrita, que es la segunda rúbrica del PDF oficial; devolver o pedir corrección no se firma.
 
 **RF-18 — Gestión de correcciones.** Si el coordinador pide corrección, el técnico ve el aviso con las observaciones en su pantalla de "Evaluación en campo" y puede emitir una nueva versión del informe desde ahí mismo.
 
-**RF-19 — Cierre de expediente.** Con el informe aprobado, en "Reportes" del panel del Coordinador aparecen los botones para generar el PDF oficial, descargarlo, y cerrar el expediente (acción irreversible, con confirmación).
+**RF-19 — Cierre de expediente.** Con el informe aprobado, en "Reportes" del panel del Coordinador aparecen los botones para generar el PDF oficial, descargarlo, y cerrar el expediente (acción irreversible, con confirmación). El PDF lleva las dos firmas —la del técnico que lo emitió y la del coordinador que lo aprobó—, cada una con su rúbrica en cursiva y el nombre registrado del firmante debajo como aclaración.
 
 **RF-20 — Consulta histórica.** Panel de Coordinador → "Consulta histórica": filtra por empresa, origen, estado y fecha; la tabla incluye si el expediente tiene informe oficial emitido y su calificación.
 
