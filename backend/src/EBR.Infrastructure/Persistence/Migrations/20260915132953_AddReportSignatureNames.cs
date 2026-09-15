@@ -28,12 +28,18 @@ namespace EBR.Infrastructure.Persistence.Migrations
 
             migrationBuilder.Sql(RellenoFirmaInforme);
 
+            // `oldNullable: true` no es decorativo: sin él, EF compara contra una columna que supone ya
+            // no nula, no ve cambio de nulabilidad y omite el SET NOT NULL, dejando la columna abierta.
             migrationBuilder.AlterColumn<string>(
                 name: "firma_nombre",
                 table: "Evaluacion_Informe",
                 type: "character varying(80)",
                 maxLength: 80,
-                nullable: false);
+                nullable: false,
+                oldClrType: typeof(string),
+                oldType: "character varying(80)",
+                oldMaxLength: 80,
+                oldNullable: true);
 
             migrationBuilder.AddCheckConstraint(
                 name: "CK_Evaluacion_Informe_Firma",
