@@ -151,19 +151,24 @@ it("issues a report with trimmed fields", async () => {
   const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 1, version: 1 }) });
   vi.stubGlobal("fetch", fetchMock);
 
-  await issueReport("token", 13, { executiveSummary: "  resumen  ", findings: "  hallazgos ", recommendations: " recos " });
+  await issueReport("token", 13, {
+    executiveSummary: "  resumen  ", findings: "  hallazgos ", recommendations: " recos ",
+    signatureName: "  A. Perez  ",
+  });
 
   const call = fetchMock.mock.calls[0];
   expect(String(call[0])).toBe("http://localhost:5080/api/evaluations/13/report");
   expect(JSON.parse(call[1].body as string)).toEqual({
     executiveSummary: "resumen", findings: "hallazgos", recommendations: "recos",
+    signatureName: "A. Perez",
   });
 });
 
 it("maps a 409 on issuing a report to a state-conflict message", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 409, json: async () => ({}) }));
-  await expect(issueReport("token", 13, { executiveSummary: "a", findings: "b", recommendations: "c" }))
-    .rejects.toThrow(/no admite una nueva versión/i);
+  await expect(issueReport("token", 13, {
+    executiveSummary: "a", findings: "b", recommendations: "c", signatureName: "A. Perez",
+  })).rejects.toThrow(/no admite una nueva versión/i);
 });
 
 it("returns null when there is no report yet (404)", async () => {
@@ -186,19 +191,24 @@ it("reviews a report with the exact decision/observations body", async () => {
   const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 1, decision: "APPROVED" }) });
   vi.stubGlobal("fetch", fetchMock);
 
-  await reviewReport("token", 13, { decision: "APPROVED" });
+  await reviewReport("token", 13, { decision: "APPROVED", signatureName: "  L. de la Cruz  " });
 
   const call = fetchMock.mock.calls[0];
   expect(String(call[0])).toBe("http://localhost:5080/api/evaluations/13/report/review");
   expect(call[1]).toMatchObject({ method: "POST" });
-  expect(JSON.parse(call[1].body as string)).toEqual({ decision: "APPROVED", observations: "" });
+  expect(JSON.parse(call[1].body as string)).toEqual({
+    decision: "APPROVED", observations: "", signatureName: "L. de la Cruz",
+  });
 });
 
 it("trims observations when returning or requesting correction", async () => {
   const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ id: 1, decision: "RETURNED" }) });
   vi.stubGlobal("fetch", fetchMock);
-  await reviewReport("token", 13, { decision: "RETURNED", observations: "  falta firma  " });
-  expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({ decision: "RETURNED", observations: "falta firma" });
+  await reviewReport("token", 13, { decision: "RETURNED", observations: "  falta firma  ", signatureName: "L. de la Cruz" });
+  // Devolver no estampa rúbrica, así que la firma no viaja aunque quien llame la traiga.
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({
+    decision: "RETURNED", observations: "falta firma", signatureName: null,
+  });
 });
 
 it("maps a 400 on review to the missing-observations message", async () => {

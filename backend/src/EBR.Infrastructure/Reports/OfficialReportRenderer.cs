@@ -125,7 +125,7 @@ public sealed class OfficialReportRenderer : IOfficialReportRenderer
                         }
                     });
 
-                    SignatureBlock(body, content.ApproverFullName);
+                    SignatureBlock(body, content);
                 });
 
                 page.Footer().Text(text =>
@@ -160,22 +160,41 @@ public sealed class OfficialReportRenderer : IOfficialReportRenderer
     }
 
     /// <summary>
-    /// Firma visual del coordinador que aprobó esta versión del informe (RF-19), al estilo de un
-    /// documento firmado electrónicamente (p. ej. Adobe Sign): el nombre se imprime en una fuente
-    /// cursiva a modo de rúbrica, con el nombre en letra normal debajo a manera de aclaración. No es una
-    /// firma digital criptográfica —esa ya vive en el metadato del PDF, ver <c>IDocumentSigner</c>—, es
-    /// solo la representación visual esperada en un documento oficial.
+    /// Las dos firmas visuales del expediente (RF-19), al estilo de un documento firmado
+    /// electrónicamente (p. ej. Adobe Sign): el técnico que emitió la versión y el coordinador que la
+    /// aprobó, cada uno con la rúbrica que escribió impresa en cursiva y su nombre registrado debajo a
+    /// manera de aclaración. Que sean dos responde al recorrido del informe —quien levanta el acta y
+    /// quien la valida—, y la rúbrica no identifica a nadie por sí sola: la aclaración sale del usuario
+    /// autenticado. No es la firma criptográfica —esa vive en el metadato, ver <c>IDocumentSigner</c>—,
+    /// es la representación visual esperada en un documento oficial.
     /// </summary>
-    private static void SignatureBlock(ColumnDescriptor column, string approverFullName)
+    private static void SignatureBlock(ColumnDescriptor column, OfficialReportContent content)
     {
-        column.Item().PaddingTop(24).MaxWidth(260).Column(signature =>
+        column.Item().PaddingTop(24).Column(block =>
         {
-            signature.Item().Text("Firma electrónica").Bold().FontSize(11).FontColor(Colors.Grey.Darken1);
-            signature.Item().PaddingTop(8).PaddingLeft(6).Text(approverFullName)
-                .FontFamily(SignatureFontFamily).FontSize(30).FontColor(Colors.Black);
+            block.Item().Text("Firmas electrónicas").Bold().FontSize(11).FontColor(Colors.Grey.Darken1);
+            block.Item().PaddingTop(8).Row(row =>
+            {
+                Signer(row.RelativeItem(), content.TechnicianSignatureName, content.TechnicianFullName,
+                    "Técnico Evaluador", "Emitido", content.ReportIssuedAt);
+                row.ConstantItem(28);
+                Signer(row.RelativeItem(), content.ApproverSignatureName, content.ApproverFullName,
+                    "Coordinador · Evaluación Basada en Riesgo", "Aprobado", content.ApprovedAt);
+            });
+        });
+    }
+
+    private static void Signer(
+        IContainer container, string rubric, string fullName, string role, string label, DateTimeOffset signedAt)
+    {
+        container.Column(signature =>
+        {
+            signature.Item().PaddingLeft(6).Text(rubric)
+                .FontFamily(SignatureFontFamily).FontSize(26).FontColor(Colors.Black);
             signature.Item().PaddingTop(2).LineHorizontal(0.75f).LineColor(Colors.Grey.Darken2);
-            signature.Item().PaddingTop(4).Text(approverFullName).FontSize(9).SemiBold();
-            signature.Item().Text("Coordinador · Evaluación Basada en Riesgo").FontSize(8).FontColor(Colors.Grey.Darken1);
+            signature.Item().PaddingTop(4).Text(fullName).FontSize(9).SemiBold();
+            signature.Item().Text(role).FontSize(8).FontColor(Colors.Grey.Darken1);
+            signature.Item().Text($"{label} {Format(signedAt)}").FontSize(7).FontColor(Colors.Grey.Darken1);
         });
     }
 
@@ -201,7 +220,7 @@ public sealed class OfficialReportRenderer : IOfficialReportRenderer
     private static string Canonicalize(OfficialReportContent content)
     {
         var builder = new StringBuilder();
-        builder.Append("v1\n");
+        builder.Append("v2\n");
         builder.Append(content.EvaluationInstanceId).Append('\n');
         builder.Append(content.CaseId).Append('\n');
         builder.Append(content.CompanyName).Append('\n');
@@ -220,6 +239,10 @@ public sealed class OfficialReportRenderer : IOfficialReportRenderer
         builder.Append(content.MinorCount).Append('\n');
         builder.Append(content.ReportIssuedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)).Append('\n');
         builder.Append(content.ApproverFullName).Append('\n');
+        builder.Append(content.ApproverSignatureName).Append('\n');
+        builder.Append(content.ApprovedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)).Append('\n');
+        builder.Append(content.TechnicianFullName).Append('\n');
+        builder.Append(content.TechnicianSignatureName).Append('\n');
         foreach (var item in content.NonConformities
                      .OrderBy(value => value.Severity, StringComparer.Ordinal)
                      .ThenBy(value => value.CriterionCode, StringComparer.Ordinal)

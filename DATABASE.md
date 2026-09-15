@@ -625,7 +625,11 @@ nombre original del archivo nunca determina la ruta de escritura.
 ## Informe de la evaluación (RF-16)
 
 `Evaluacion_Informe` guarda el texto del informe —`resumen_ejecutivo`, `hallazgos` y
-`recomendaciones`— junto a `instancia_id`, `version`, `estado`, `fecha_emision` y `emitido_por`. Las
+`recomendaciones`— junto a `instancia_id`, `version`, `estado`, `firma_nombre`, `fecha_emision` y
+`emitido_por`. `firma_nombre` es la rúbrica que el técnico escribe al emitir: emitir el informe es
+firmarlo, así que la columna es obligatoria (`CK_Evaluacion_Informe_Firma`) y el PDF oficial la
+estampa en cursiva. No identifica a nadie por sí sola —debajo se imprime el nombre registrado de
+`emitido_por`, que es la única autoría—, solo deja constancia de un acto deliberado de firma. Las
 cifras del BPM (porcentaje, calificación, no conformidades) **no se copian aquí**: viven en
 `Evaluacion_Resultado`, que ya es inmutable, así que cada lectura del informe las reproduce desde su
 única fuente y no pueden divergir.
@@ -662,9 +666,13 @@ al expediente recibe `403`. Las cuentas de empresa no tienen acceso a estas ruta
 ## Revisión del informe y correcciones (RF-17 y RF-18)
 
 `Evaluacion_Informe_Revision` guarda una fila por decisión del coordinador sobre una versión concreta
-del informe: `informe_id`, `decision`, `observaciones`, `fecha_revision` y `revisado_por`. Ninguna
-fila se reemplaza, porque las observaciones son lo que el técnico consulta para corregir y forman
-parte del expediente igual que el informe.
+del informe: `informe_id`, `decision`, `observaciones`, `firma_nombre`, `fecha_revision` y
+`revisado_por`. Ninguna fila se reemplaza, porque las observaciones son lo que el técnico consulta
+para corregir y forman parte del expediente igual que el informe.
+
+`firma_nombre` es la rúbrica del coordinador y es nula salvo en las aprobaciones: solo aprobar
+estampa una firma en el PDF oficial, devolver o pedir corrección no imprime nada.
+`CK_Evaluacion_Informe_Revision_Firma` obliga a que sea exactamente así en ambos sentidos.
 
 El SRS enumera tres acciones de revisión —aprobar, devolver y solicitar corrección— sin definir en
 qué se diferencian las dos últimas. No se inventa una distinción: se conservan como decisiones
@@ -991,9 +999,10 @@ Procedimientos transaccionales:
   declarada para esa plantilla y que `NA` solo se use si el ítem lo permite.
 - `sp_enviar_evaluacion(instancia_id, usuario_id)` bloquea la instancia y transiciona el caso a
   `PENDING_REPORT` en una sola transacción, rechazando un segundo envío.
-- `sp_revisar_informe(instancia_id, decision, observaciones, usuario_id)` bloquea el expediente,
+- `sp_revisar_informe(instancia_id, decision, observaciones, usuario_id, firma_nombre)` bloquea el expediente,
   valida que esté en revisión y que se actúe sobre su última versión, registra la decisión y su
-  historial y transiciona a `APPROVED` o `CORRECTION_REQUIRED` de forma atómica.
+  historial y transiciona a `APPROVED` o `CORRECTION_REQUIRED` de forma atómica. Exige
+  `firma_nombre` cuando la decisión es `APPROVED` y la descarta en las demás.
 - `sp_cerrar_expediente(caso_id, resultado, usuario_id)` bloquea el expediente y exige estado
   `APPROVED`, última versión aprobada y PDF oficial asociado; crea una sola acta de cierre,
   transiciona a `CLOSED` y registra el historial. Una segunda llamada devuelve el cierre existente.
@@ -1030,8 +1039,8 @@ Disparadores:
   evaluación ya enviada y con la versión consecutiva, mediante la función
   `fn_evaluacion_informe_valido()`.
 - `tr_evaluacion_informe_inmutable` sobre `Evaluacion_Informe` impide eliminar una versión emitida y
-  reescribir su contenido; una corrección se emite como versión nueva. Usa la función
-  `fn_evaluacion_informe_inmutable()`.
+  reescribir su contenido —`firma_nombre` incluida, porque la rúbrica es parte de lo que se emitió—;
+  una corrección se emite como versión nueva. Usa la función `fn_evaluacion_informe_inmutable()`.
 - `tr_evaluacion_informe_revision_valida` sobre `Evaluacion_Informe_Revision` admite revisar
   únicamente la última versión emitida del informe y exige observaciones en las devoluciones,
   mediante la función `fn_evaluacion_informe_revision_valida()`.
@@ -1071,7 +1080,10 @@ incorporaron en `AddEvaluationReport`. La tabla `Evaluacion_Informe_Revision`, l
 inmutabilidad se incorporaron en `AddOfficialReportAndCaseClosure`. El PDF se almacena mediante
 `IEvidenceStorage`; PostgreSQL conserva únicamente nombre, tipo MIME, tamaño, hash SHA-256, clave,
 fecha y usuario. La tabla `Notificacion` se incorporó en `AddOperationalReadsAndNotifications`, que
-no crea rutinas: es la vigésima y última migración. Sigue pendiente
+no crea rutinas. `AddReportSignatureNames` añade `firma_nombre` a `Evaluacion_Informe` y a
+`Evaluacion_Informe_Revision`, rellena lo ya emitido con el nombre registrado de quien firmó,
+extiende `fn_evaluacion_informe_inmutable` para cubrir la rúbrica y reemplaza `sp_revisar_informe`
+por la versión de cinco parámetros: es la vigesimoprimera y última migración. Sigue pendiente
 `fn_catalogo_opciones`: los catálogos generales descritos arriba se resuelven hoy con consultas EF
 equivalentes porque las pruebas de integración corren sobre el proveedor en memoria, que no ejecuta
 funciones de PostgreSQL.

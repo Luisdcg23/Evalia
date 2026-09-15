@@ -17,6 +17,9 @@ namespace EBR.Api.Endpoints;
 /// </summary>
 public static class EvaluationReportEndpoints
 {
+    /// <summary>Tope de la rúbrica escrita, igual al de la columna <c>firma_nombre</c>.</summary>
+    private const int SignatureNameMaxLength = 80;
+
     public static IEndpointRouteBuilder MapEvaluationReportEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/api/evaluations/{id:int}/report", IssueAsync)
@@ -133,6 +136,14 @@ public static class EvaluationReportEndpoints
         if (!Guid.TryParse(principal.FindFirstValue(ClaimTypes.NameIdentifier), out var actingUserId))
             return Results.Unauthorized();
 
+        // Emitir el informe es firmarlo: la rúbrica que escribe el técnico es lo que se estampa en el
+        // PDF oficial, así que un informe emitido sin firma no es un estado que el expediente admita.
+        var signatureName = (request.SignatureName ?? string.Empty).Trim();
+        if (signatureName.Length == 0)
+            return Results.BadRequest(new { message = "Emitir el informe exige la firma del técnico." });
+        if (signatureName.Length > SignatureNameMaxLength)
+            return Results.BadRequest(new { message = $"La firma no admite más de {SignatureNameMaxLength} caracteres." });
+
         var instance = await context.EvaluationInstances.AsNoTracking()
             .SingleOrDefaultAsync(value => value.Id == id, cancellationToken);
         if (instance is null) return Results.NotFound();
@@ -172,6 +183,7 @@ public static class EvaluationReportEndpoints
             ExecutiveSummary = request.ExecutiveSummary.Trim(),
             Findings = request.Findings.Trim(),
             Recommendations = request.Recommendations.Trim(),
+            SignatureName = signatureName,
             CreatedBy = actingUserId
         };
         context.EvaluationReports.Add(report);
@@ -233,6 +245,7 @@ public static class EvaluationReportEndpoints
         var decision = (request.Decision ?? string.Empty).Trim().ToUpperInvariant();
         var observations = (request.Observations ?? string.Empty).Trim();
         var approves = decision == EvaluationReportDecisions.Approved;
+        var signatureName = (request.SignatureName ?? string.Empty).Trim();
 
         // El estado del informe es la decisión, así que una decisión inventada lo dejaría en un estado
         // que no existe en el catálogo.
@@ -244,10 +257,19 @@ public static class EvaluationReportEndpoints
         if (!approves && observations.Length == 0)
             return Results.BadRequest(new { message = "Devolver el informe exige observaciones que indiquen qué corregir." });
 
+        // Aprobar es lo que estampa la rúbrica del coordinador en el PDF oficial, así que solo esa
+        // decisión se firma: devolver o pedir corrección no imprime nada y no admite firma.
+        if (approves && signatureName.Length == 0)
+            return Results.BadRequest(new { message = "Aprobar el informe exige la firma del coordinador." });
+        if (signatureName.Length > SignatureNameMaxLength)
+            return Results.BadRequest(new { message = $"La firma no admite más de {SignatureNameMaxLength} caracteres." });
+
+        var signature = approves ? signatureName : null;
+
         if (context.Database.IsNpgsql())
         {
             var problem = await PostgresCommandProblem.ExecuteAsync(() => context.Database.ExecuteSqlInterpolatedAsync(
-                $"CALL sp_revisar_informe({id}, {decision}, {observations}, {actingUserId})", cancellationToken));
+                $"CALL sp_revisar_informe({id}, {decision}, {observations}, {actingUserId}, {signature})", cancellationToken));
             if (problem is not null) return problem;
             context.ChangeTracker.Clear();
             report = await context.EvaluationReports.AsNoTracking()
@@ -265,6 +287,7 @@ public static class EvaluationReportEndpoints
                 ReportId = report.Id,
                 Decision = decision,
                 Observations = observations,
+                SignatureName = signature,
                 ReviewedBy = actingUserId
             });
             context.CaseStateHistories.Add(new CaseStateHistory
@@ -553,13 +576,20 @@ public static class EvaluationReportEndpoints
         // Firma visual del PDF (RF-19): el nombre de quien aprobó esta versión del informe, tomado de
         // la revisión ya persistida. No se guarda nada nuevo — es el mismo dato que ya usa RF-17/RF-18,
         // resuelto aquí solo para imprimirlo en el documento.
-        var approverId = await context.EvaluationReportReviews.AsNoTracking()
+        var approval = await context.EvaluationReportReviews.AsNoTracking()
             .Where(value => value.ReportId == report.Id && value.Decision == EvaluationReportDecisions.Approved)
             .OrderByDescending(value => value.ReviewedAt)
-            .Select(value => (Guid?)value.ReviewedBy)
+            .Select(value => new { value.ReviewedBy, value.SignatureName, value.ReviewedAt })
             .FirstOrDefaultAsync(cancellationToken);
-        var approverName = approverId is null ? null : await context.Users.AsNoTracking()
-            .Where(user => user.Id == approverId)
+        var approverName = approval is null ? null : await context.Users.AsNoTracking()
+            .Where(user => user.Id == approval.ReviewedBy)
+            .Select(user => user.FullName)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        // La otra firma del documento: el técnico que emitió esta versión. Sale de la misma fila del
+        // informe, así que no hay nada que resolver salvo su nombre registrado para la aclaración.
+        var technicianName = await context.Users.AsNoTracking()
+            .Where(user => user.Id == report.CreatedBy)
             .Select(user => user.FullName)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -584,7 +614,11 @@ public static class EvaluationReportEndpoints
             evidences,
             report.CreatedAt,
             DateTimeOffset.UtcNow,
-            string.IsNullOrWhiteSpace(approverName) ? "Coordinador EBR" : approverName);
+            string.IsNullOrWhiteSpace(approverName) ? "Coordinador EBR" : approverName,
+            string.IsNullOrWhiteSpace(approval?.SignatureName) ? "Coordinador EBR" : approval.SignatureName,
+            approval?.ReviewedAt ?? report.CreatedAt,
+            string.IsNullOrWhiteSpace(technicianName) ? "Técnico Evaluador" : technicianName,
+            report.SignatureName);
     }
 
     private static OfficialReportResponse DescribeOfficial(EvaluationOfficialReport value, int instanceId, int version) =>
@@ -625,6 +659,7 @@ public static class EvaluationReportEndpoints
         reportVersion,
         review.Decision,
         review.Observations,
+        review.SignatureName,
         review.ReviewedAt,
         review.ReviewedBy);
 
@@ -636,12 +671,14 @@ public static class EvaluationReportEndpoints
         report.ExecutiveSummary,
         report.Findings,
         report.Recommendations,
+        report.SignatureName,
         report.CreatedAt,
         report.CreatedBy);
 
-    private sealed record IssueReportRequest(string ExecutiveSummary, string Findings, string Recommendations);
+    private sealed record IssueReportRequest(
+        string ExecutiveSummary, string Findings, string Recommendations, string? SignatureName);
 
-    private sealed record ReviewReportRequest(string? Decision, string? Observations);
+    private sealed record ReviewReportRequest(string? Decision, string? Observations, string? SignatureName);
     private sealed record CloseCaseRequest(string? Result);
 
     private sealed record EvaluationReportReviewResponse(
@@ -650,6 +687,7 @@ public static class EvaluationReportEndpoints
         int ReportVersion,
         string Decision,
         string Observations,
+        string? SignatureName,
         DateTimeOffset ReviewedAt,
         Guid ReviewedBy);
 
@@ -661,6 +699,7 @@ public static class EvaluationReportEndpoints
         string ExecutiveSummary,
         string Findings,
         string Recommendations,
+        string SignatureName,
         DateTimeOffset CreatedAt,
         Guid CreatedBy);
 

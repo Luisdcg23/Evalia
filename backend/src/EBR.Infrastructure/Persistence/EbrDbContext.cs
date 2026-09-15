@@ -687,7 +687,10 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
 
         builder.Entity<EvaluationReport>(entity =>
         {
-            entity.ToTable("Evaluacion_Informe");
+            entity.ToTable("Evaluacion_Informe", table =>
+            {
+                table.HasCheckConstraint("CK_Evaluacion_Informe_Firma", "char_length(firma_nombre) > 0");
+            });
             entity.HasKey(item => item.Id);
             entity.HasIndex(item => new { item.EvaluationInstanceId, item.Version }).IsUnique();
             entity.Property(item => item.EvaluationInstanceId).HasColumnName("instancia_id");
@@ -696,6 +699,7 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
             entity.Property(item => item.ExecutiveSummary).HasColumnName("resumen_ejecutivo").HasColumnType("text");
             entity.Property(item => item.Findings).HasColumnName("hallazgos").HasColumnType("text");
             entity.Property(item => item.Recommendations).HasColumnName("recomendaciones").HasColumnType("text");
+            entity.Property(item => item.SignatureName).HasColumnName("firma_nombre").HasMaxLength(80);
             entity.Property(item => item.CreatedAt).HasColumnName("fecha_emision");
             entity.Property(item => item.CreatedBy).HasColumnName("emitido_por");
             entity.HasOne<EvaluationInstance>().WithMany().HasForeignKey(item => item.EvaluationInstanceId).OnDelete(DeleteBehavior.Restrict);
@@ -704,12 +708,19 @@ public sealed class EbrDbContext(DbContextOptions<EbrDbContext> options)
 
         builder.Entity<EvaluationReportReview>(entity =>
         {
-            entity.ToTable("Evaluacion_Informe_Revision");
+            entity.ToTable("Evaluacion_Informe_Revision", table =>
+            {
+                // Solo la aprobación se firma; devolver y solicitar corrección no estampan rúbrica.
+                table.HasCheckConstraint(
+                    "CK_Evaluacion_Informe_Revision_Firma",
+                    "(decision = 'APPROVED' AND char_length(firma_nombre) > 0) OR (decision <> 'APPROVED' AND firma_nombre IS NULL)");
+            });
             entity.HasKey(item => item.Id);
             entity.HasIndex(item => item.ReportId);
             entity.Property(item => item.ReportId).HasColumnName("informe_id");
             entity.Property(item => item.Decision).HasColumnName("decision").HasMaxLength(30);
             entity.Property(item => item.Observations).HasColumnName("observaciones").HasColumnType("text");
+            entity.Property(item => item.SignatureName).HasColumnName("firma_nombre").HasMaxLength(80);
             entity.Property(item => item.ReviewedAt).HasColumnName("fecha_revision");
             entity.Property(item => item.ReviewedBy).HasColumnName("revisado_por");
             entity.HasOne<EvaluationReport>().WithMany().HasForeignKey(item => item.ReportId).OnDelete(DeleteBehavior.Restrict);

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import SignatureField from "../reports/SignatureField";
 import type { MyCaseRow } from "../operations/api";
 import { buildItemTree, flattenTree } from "../templates/hierarchy";
 import {
@@ -88,10 +89,12 @@ interface AnswerState {
 type Phase = "loading" | "start" | "capture" | "result" | "error";
 
 export default function FieldEvaluationScreen({
-  accessToken, caseRow, onExit, onCaseChanged,
+  accessToken, caseRow, userName, onExit, onCaseChanged,
 }: {
   accessToken: string;
   caseRow: MyCaseRow;
+  /** Nombre registrado del técnico con sesión; acompaña su rúbrica como aclaración en el informe. */
+  userName: string;
   onExit: () => void;
   onCaseChanged: () => void | Promise<void>;
 }) {
@@ -112,7 +115,7 @@ export default function FieldEvaluationScreen({
   const [result, setResult] = useState<EvaluationResult | null>(null);
   const [report, setReport] = useState<EvaluationReport | null>(null);
   const [reviews, setReviews] = useState<EvaluationReportReview[]>([]);
-  const [reportForm, setReportForm] = useState({ executiveSummary: "", findings: "", recommendations: "" });
+  const [reportForm, setReportForm] = useState({ executiveSummary: "", findings: "", recommendations: "", signatureName: "" });
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState("");
   const [reportSuccess, setReportSuccess] = useState("");
@@ -190,6 +193,8 @@ export default function FieldEvaluationScreen({
       executiveSummary: reportData?.executiveSummary ?? "",
       findings: reportData?.findings ?? "",
       recommendations: reportData?.recommendations ?? "",
+      // La rúbrica no se precarga: cada versión se firma de nuevo, no se hereda la firma anterior.
+      signatureName: "",
     });
   }, [accessToken]);
 
@@ -290,7 +295,8 @@ export default function FieldEvaluationScreen({
       setReport(issued);
       const [reviewData] = await Promise.all([listReportReviews(accessToken, instance.id), onCaseChanged()]);
       setReviews(reviewData);
-      setReportSuccess(`Informe versión ${issued.version} emitido.`);
+      setReportForm(prev => ({ ...prev, signatureName: "" }));
+      setReportSuccess(`Informe versión ${issued.version} emitido y firmado como ${issued.signatureName}.`);
     } catch (issueError) {
       setReportError(message(issueError, "No fue posible emitir el informe."));
     } finally {
@@ -487,15 +493,25 @@ export default function FieldEvaluationScreen({
               />
             </label>
 
+            <SignatureField
+              label="Firma del técnico"
+              value={reportForm.signatureName}
+              onChange={signatureName => setReportForm(prev => ({ ...prev, signatureName }))}
+              signerFullName={userName}
+              role="Técnico Evaluador"
+              disabled={reportBusy}
+            />
+
             {reportError && <p role="alert" style={errorBanner}>{reportError}</p>}
             {reportSuccess && <p style={{ color: T.green, fontSize: "0.78rem", fontFamily: "Poppins, sans-serif" }}>{reportSuccess}</p>}
 
             <button
               onClick={() => void handleIssueReport()}
-              disabled={reportBusy || !reportForm.executiveSummary.trim() || !reportForm.findings.trim() || !reportForm.recommendations.trim()}
+              disabled={reportBusy || !reportForm.executiveSummary.trim() || !reportForm.findings.trim()
+                || !reportForm.recommendations.trim() || !reportForm.signatureName.trim()}
               style={{ ...primaryButton, alignSelf: "flex-start", opacity: reportBusy ? 0.6 : 1 }}
             >
-              {reportBusy ? "Emitiendo…" : report ? "Emitir nueva versión" : "Emitir informe"}
+              {reportBusy ? "Emitiendo…" : report ? "Firmar y emitir nueva versión" : "Firmar y emitir informe"}
             </button>
           </div>
         </div>

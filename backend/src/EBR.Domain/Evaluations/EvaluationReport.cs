@@ -41,6 +41,14 @@ public sealed class EvaluationReport
     public required string ExecutiveSummary { get; set; }
     public required string Findings { get; set; }
     public required string Recommendations { get; set; }
+
+    /// <summary>
+    /// Rúbrica que escribió el técnico al emitir esta versión. Se conserva literal porque es lo que
+    /// se estampa en cursiva en el PDF oficial; quién firmó de verdad no lo decide este texto sino
+    /// <see cref="CreatedBy"/>, que sale de la sesión y se imprime debajo como aclaración.
+    /// </summary>
+    public required string SignatureName { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
     public Guid CreatedBy { get; set; }
 }
@@ -56,6 +64,13 @@ public sealed class EvaluationReportReview
     public int ReportId { get; set; }
     public required string Decision { get; set; }
     public required string Observations { get; set; }
+
+    /// <summary>
+    /// Rúbrica que escribió el coordinador al aprobar. Solo la aprobación se firma: devolver o pedir
+    /// corrección no estampa nada en el informe, así que en esas dos decisiones queda nula.
+    /// </summary>
+    public string? SignatureName { get; set; }
+
     public DateTimeOffset ReviewedAt { get; set; } = DateTimeOffset.UtcNow;
     public Guid ReviewedBy { get; set; }
 }
