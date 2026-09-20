@@ -440,6 +440,22 @@ export async function downloadOfficialReport(
   return { blob: await response.blob(), fileName };
 }
 
+/**
+ * Vista previa NO oficial del informe para el coordinador, antes de que decida. El endpoint exige el
+ * header Authorization, así que se trae el PDF por fetch como blob para abrirlo en una pestaña nueva.
+ * No se guarda ni se firma nada: es el mismo documento con marca de agua "NO OFICIAL".
+ */
+export async function previewReportPdf(accessToken: string, evaluationId: number): Promise<Blob> {
+  const response = await fetch(`${baseUrl}/api/evaluations/${evaluationId}/report/preview`, {
+    headers: authHeaders(accessToken),
+  });
+  if (!response.ok) {
+    if (response.status === 404) throw new Error("El informe no existe.");
+    throw new Error(await readErrorMessage(response, "No fue posible generar la vista previa del PDF."));
+  }
+  return response.blob();
+}
+
 export interface CaseClosure {
   id: number;
   caseId: number;
