@@ -57,15 +57,26 @@ export async function enqueueResponse(response: OutboxResponse): Promise<void> {
   }
 }
 
-/** Respuestas capturadas que todavía no llegaron a la API, para avisarlo en la interfaz. */
-export async function countPendingResponses(ownerId?: string): Promise<number> {
+/**
+ * Respuestas capturadas que todavía no llegaron a la API. La pantalla de captura las usa para marcar
+ * cada pregunta como "pendiente de sincronizar" al retomar la evaluación y para saber cuáles siguen
+ * en cola después de un intento de envío.
+ */
+export async function listPendingResponses(ownerId?: string, evaluationId?: number): Promise<OutboxResponse[]> {
   const database = await open();
   try {
     const entries = await run(database.transaction(storeName, "readonly").objectStore(storeName).getAll() as IDBRequest<OutboxResponse[]>);
-    return ownerId ? entries.filter(item => ownerOf(item) === ownerId).length : entries.length;
+    return entries.filter(item =>
+      (ownerId === undefined || ownerOf(item) === ownerId) &&
+      (evaluationId === undefined || item.evaluationId === evaluationId));
   } finally {
     database.close();
   }
+}
+
+/** Respuestas capturadas que todavía no llegaron a la API, para avisarlo en la interfaz. */
+export async function countPendingResponses(ownerId?: string): Promise<number> {
+  return (await listPendingResponses(ownerId)).length;
 }
 
 let inFlight: Promise<OutboxFlushResult> | null = null;

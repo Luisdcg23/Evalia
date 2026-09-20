@@ -10,6 +10,9 @@ import {
   type EvaluationResult, type EvaluationTemplateItem, type SaveResponseInput,
 } from "./api";
 import { PerItemDebouncer } from "./autosave";
+import { loadSession } from "@/auth/session";
+import { enqueueResponse, listPendingResponses } from "@/offline/outbox";
+import { syncPendingResponses } from "@/offline/sync";
 
 /* ── Tokens visuales (mismos que TemplateAdmin/ResponsiveDashboard) ────────── */
 const T = {
@@ -77,14 +80,27 @@ function writeCacheEntry(evaluationId: number, itemId: number, answer: CachedAns
   }
 }
 
+/* ── Captura sin cobertura (RF-15) ──────────────────────────────────────────
+   `fetch` falla con TypeError cuando no hay red o la API no responde; los
+   rechazos de la API (400/403/409) llegan como Error con mensaje. Solo el primer
+   caso va a la cola local: reintentar un 400 nunca lo convertiría en 200. */
+function isNetworkFailure(error: unknown): boolean {
+  return error instanceof TypeError || (typeof navigator !== "undefined" && navigator.onLine === false);
+}
+/** Identifica al técnico dentro de la cola compartida del dispositivo. */
+const sessionOwnerId = () => loadSession()?.user.email ?? undefined;
+
 interface AnswerState {
   optionCode: string;
   observations: string;
   comments: string;
   saving: boolean;
   error: string;
+  /** Guardada en la cola local a la espera de red; se envía sola al reconectar. */
+  pending: boolean;
   syncedAt: string | null;
 }
+const emptyAnswer: AnswerState = { optionCode: "", observations: "", comments: "", saving: false, error: "", pending: false, syncedAt: null };
 
 type Phase = "loading" | "start" | "capture" | "result" | "error";
 
@@ -122,23 +138,63 @@ export default function FieldEvaluationScreen({
 
   const debouncerRef = useRef<PerItemDebouncer<[SaveResponseInput]> | null>(null);
 
+  const refreshProgress = useCallback((evaluationId: number) => {
+    void getEvaluation(accessToken, evaluationId).then(setInstance).catch(() => {});
+  }, [accessToken]);
+
   const persist = useCallback(async (itemId: number, input: SaveResponseInput, evaluationId: number) => {
     setAnswers(prev => ({ ...prev, [itemId]: { ...prev[itemId], saving: true, error: "" } }));
+    const answer: CachedAnswer = { optionCode: input.optionCode, observations: input.observations ?? "", comments: input.comments ?? "" };
     try {
       await saveEvaluationResponse(accessToken, evaluationId, itemId, input);
-      writeCacheEntry(evaluationId, itemId, {
-        optionCode: input.optionCode, observations: input.observations ?? "", comments: input.comments ?? "",
-      });
-      setAnswers(prev => ({ ...prev, [itemId]: { ...prev[itemId], saving: false, error: "", syncedAt: new Date().toISOString() } }));
-      setInstance(prev => {
-        if (!prev) return prev;
-        void getEvaluation(accessToken, evaluationId).then(setInstance).catch(() => {});
-        return prev;
-      });
+      writeCacheEntry(evaluationId, itemId, answer);
+      setAnswers(prev => ({ ...prev, [itemId]: { ...prev[itemId], saving: false, error: "", pending: false, syncedAt: new Date().toISOString() } }));
+      refreshProgress(evaluationId);
     } catch (saveError) {
-      setAnswers(prev => ({ ...prev, [itemId]: { ...prev[itemId], saving: false, error: message(saveError, "No fue posible guardar la respuesta.") } }));
+      if (!isNetworkFailure(saveError)) {
+        setAnswers(prev => ({ ...prev, [itemId]: { ...prev[itemId], saving: false, error: message(saveError, "No fue posible guardar la respuesta.") } }));
+        return;
+      }
+      // Sin cobertura: la respuesta queda en la cola local y en la copia de la pantalla, así el
+      // técnico sigue el recorrido y lo capturado sobrevive a una recarga. Se envía al reconectar.
+      try {
+        await enqueueResponse({ ownerId: sessionOwnerId(), evaluationId, itemId, ...answer });
+        writeCacheEntry(evaluationId, itemId, answer);
+        setAnswers(prev => ({ ...prev, [itemId]: { ...prev[itemId], saving: false, error: "", pending: true, syncedAt: null } }));
+      } catch (queueError) {
+        setAnswers(prev => ({ ...prev, [itemId]: { ...prev[itemId], saving: false, error: message(queueError, "Sin conexión y sin almacenamiento local: la respuesta no se guardó.") } }));
+      }
     }
-  }, [accessToken]);
+  }, [accessToken, refreshProgress]);
+
+  /**
+   * Reenvía lo que quedó en cola y refleja en pantalla lo que ya llegó a la API. Se dispara al
+   * retomar la evaluación, al recuperar la red y antes de finalizar. Devuelve cuántas respuestas
+   * de esta evaluación siguen pendientes.
+   */
+  const syncPending = useCallback(async (evaluationId: number): Promise<number> => {
+    const ownerId = sessionOwnerId();
+    try {
+      await syncPendingResponses(accessToken);
+    } catch {
+      // sin red todavía: lo pendiente sigue en cola
+    }
+    const remaining = new Set((await listPendingResponses(ownerId, evaluationId).catch(() => [])).map(item => item.itemId));
+    setAnswers(prev => {
+      const next: Record<number, AnswerState> = { ...prev };
+      for (const [key, current] of Object.entries(prev)) {
+        const itemId = Number(key);
+        if (current.pending && !remaining.has(itemId)) {
+          next[itemId] = { ...current, pending: false, syncedAt: new Date().toISOString() };
+        } else if (!current.pending && remaining.has(itemId)) {
+          next[itemId] = { ...current, pending: true, syncedAt: null };
+        }
+      }
+      return next;
+    });
+    refreshProgress(evaluationId);
+    return remaining.size;
+  }, [accessToken, refreshProgress]);
 
   useEffect(() => {
     debouncerRef.current = new PerItemDebouncer<[SaveResponseInput]>(
@@ -164,21 +220,35 @@ export default function FieldEvaluationScreen({
     setEvidenceCounts(counts);
 
     const cached = readCache(evaluationId);
+    // Lo que sigue en la cola local no llegó a la API: se muestra como pendiente, no como guardado.
+    const queued = new Set((await listPendingResponses(sessionOwnerId(), evaluationId).catch(() => [])).map(item => item.itemId));
     const hydrated: Record<number, AnswerState> = {};
     for (const item of treeItems) {
       if (item.itemType !== "QUESTION") continue;
       const cachedAnswer = cached[item.id];
+      const pending = queued.has(item.id);
       hydrated[item.id] = {
         optionCode: cachedAnswer?.optionCode ?? "",
         observations: cachedAnswer?.observations ?? "",
         comments: cachedAnswer?.comments ?? "",
         saving: false,
         error: "",
-        syncedAt: cachedAnswer ? "cache" : null,
+        pending,
+        syncedAt: cachedAnswer && !pending ? "cache" : null,
       };
     }
     setAnswers(hydrated);
   }, [accessToken]);
+
+  // Al recuperar la red (o al retomar una evaluación con cola) se reenvía lo pendiente.
+  const captureInstanceId = phase === "capture" ? instance?.id : undefined;
+  useEffect(() => {
+    if (captureInstanceId === undefined) return;
+    const sync = () => { void syncPending(captureInstanceId); };
+    sync();
+    window.addEventListener("online", sync);
+    return () => window.removeEventListener("online", sync);
+  }, [captureInstanceId, syncPending]);
 
   const loadResultAndReport = useCallback(async (evaluationId: number) => {
     const [resultData, reportData, reviewData] = await Promise.all([
@@ -245,7 +315,7 @@ export default function FieldEvaluationScreen({
 
   function handleAnswerChange(itemId: number, patch: Partial<Pick<AnswerState, "optionCode" | "observations" | "comments">>) {
     setAnswers(prev => {
-      const current: AnswerState = prev[itemId] ?? { optionCode: "", observations: "", comments: "", saving: false, error: "", syncedAt: null };
+      const current: AnswerState = prev[itemId] ?? emptyAnswer;
       const next = { ...current, ...patch };
       if (next.optionCode) {
         debouncerRef.current?.schedule(itemId, { optionCode: next.optionCode, observations: next.observations, comments: next.comments });
@@ -274,6 +344,12 @@ export default function FieldEvaluationScreen({
     setSubmitBusy(true);
     setErrorMessage("");
     try {
+      // Finalizar congela las respuestas del servidor: antes tiene que llegar lo capturado sin red.
+      const stillPending = await syncPending(instance.id);
+      if (stillPending > 0) {
+        setErrorMessage(`Hay ${stillPending} respuesta(s) pendiente(s) de sincronizar. Se necesita conexión para finalizar la evaluación.`);
+        return;
+      }
       await submitEvaluation(accessToken, instance.id);
       await onCaseChanged();
       await loadInstance(instance.id);
@@ -306,6 +382,7 @@ export default function FieldEvaluationScreen({
 
   const tree = useMemo(() => buildItemTree(items.filter(item => item.isActive)), [items]);
   const flatNodes = useMemo(() => flattenTree(tree), [tree]);
+  const pendingCount = useMemo(() => Object.values(answers).filter(answer => answer.pending).length, [answers]);
 
   const lastReview = reviews.length > 0 ? reviews[reviews.length - 1] : null;
   const correctionRequested = lastReview?.decision === "CORRECTION_REQUESTED";
@@ -400,6 +477,19 @@ export default function FieldEvaluationScreen({
             )}
 
           <div style={{ ...panelStyle, position: "sticky", bottom: 0 }}>
+            {pendingCount > 0 && (
+              <div role="status" style={{
+                display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap",
+                padding: "10px 12px", borderRadius: 10, border: `1px solid ${T.yellow}55`, background: "rgba(246,229,59,0.08)",
+              }}>
+                <p style={{ color: T.yellow, fontSize: "0.74rem", fontFamily: "Poppins, sans-serif", fontWeight: 600 }}>
+                  {pendingCount} respuesta(s) pendiente(s) de sincronizar · se enviarán automáticamente al recuperar la conexión.
+                </p>
+                <button onClick={() => void syncPending(instance.id)} style={{ ...secondaryButton, padding: "6px 12px", fontSize: "0.72rem" }}>
+                  Sincronizar ahora
+                </button>
+              </div>
+            )}
             {confirmingSubmit
               ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -532,7 +622,12 @@ function QuestionCard({
   onChange: (patch: Partial<Pick<AnswerState, "optionCode" | "observations" | "comments">>) => void;
   onUploadEvidence: (file: File) => void;
 }) {
-  const state = answer ?? { optionCode: "", observations: "", comments: "", saving: false, error: "", syncedAt: null };
+  const state = answer ?? emptyAnswer;
+  const status = state.saving ? { label: "Guardando…", color: T.yellow }
+    : state.error ? { label: "Error al guardar", color: T.red }
+    : state.pending ? { label: "Pendiente de sincronizar", color: T.yellow }
+    : state.syncedAt ? { label: "Guardado", color: T.green }
+    : { label: "Sin responder", color: T.txtFaint };
   return (
     <div style={{ ...panelStyle, marginLeft: depth * 14, gap: 8 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
@@ -541,8 +636,8 @@ function QuestionCard({
           {item.description}
           {item.isCritical && <span style={{ marginLeft: 8, fontSize: "0.6rem", fontWeight: 800, color: T.magenta }}>CRÍTICA</span>}
         </p>
-        <span style={{ fontSize: "0.62rem", color: state.saving ? T.yellow : state.error ? T.red : state.syncedAt ? T.green : T.txtFaint, fontFamily: "Poppins, sans-serif", whiteSpace: "nowrap" }}>
-          {state.saving ? "Guardando…" : state.error ? "Error al guardar" : state.syncedAt ? "Guardado" : "Sin responder"}
+        <span style={{ fontSize: "0.62rem", color: status.color, fontFamily: "Poppins, sans-serif", whiteSpace: "nowrap" }}>
+          {status.label}
         </span>
       </div>
 
