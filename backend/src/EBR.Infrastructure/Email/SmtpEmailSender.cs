@@ -11,7 +11,8 @@ namespace EBR.Infrastructure.Email;
 /// Implementación de <see cref="IEmailSender"/> sobre SMTP (MailKit). Se activa cuando la configuración
 /// declara un host en <c>Email:Host</c>; en su ausencia la aplicación usa <see cref="NullEmailSender"/>,
 /// que solo registra el correo en el log. Pensada para un proveedor SMTP estándar (p. ej. Gmail con
-/// contraseña de aplicación) con STARTTLS en el puerto 587.
+/// contraseña de aplicación): STARTTLS en el puerto 587 o TLS implícito en el 465, según el puerto
+/// configurado. Algunas redes bloquean el 587 y solo dejan pasar el 465.
 /// </summary>
 public sealed class SmtpEmailSender : IEmailSender
 {
@@ -49,11 +50,18 @@ public sealed class SmtpEmailSender : IEmailSender
         message.Body = BuildBody(plainTextBody, htmlBody);
 
         using var client = new SmtpClient();
-        await client.ConnectAsync(_host, _port, SecureSocketOptions.StartTls, cancellationToken);
+        await client.ConnectAsync(_host, _port, ResolveSecurity(_port), cancellationToken);
         await client.AuthenticateAsync(_user, _password, cancellationToken);
         await client.SendAsync(message, cancellationToken);
         await client.DisconnectAsync(true, cancellationToken);
     }
+
+    /// <summary>
+    /// El 465 es SMTPS (TLS desde el primer byte); cualquier otro puerto negocia STARTTLS. En ambos casos
+    /// el cifrado es obligatorio: nunca se degrada a texto plano aunque el servidor no lo anuncie.
+    /// </summary>
+    private static SecureSocketOptions ResolveSecurity(int port) =>
+        port == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls;
 
     /// <summary>
     /// Sin HTML, el mensaje es texto plano puro. Con HTML, se arma como <c>multipart/alternative</c> —el
