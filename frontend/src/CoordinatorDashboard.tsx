@@ -8,7 +8,7 @@ import {
 } from "./features/cases/api";
 import { getDashboard, listMyCases, listTechnicians, type DashboardMetrics } from "./features/operations/api";
 import {
-  closeCase, downloadOfficialReport, generateOfficialReport, getCurrentReport, getEvaluationResult,
+  closeCase, downloadOfficialReport, generateOfficialReport, previewReportPdf, getCurrentReport, getEvaluationResult,
   listReportReviews, reviewReport, type EvaluationReport, type EvaluationReportReview,
   type EvaluationResult, type OfficialReport, type ReportReviewDecision,
 } from "./features/field-evaluation/api";
@@ -1108,6 +1108,25 @@ function ReportReviewDetail({ caso, accessToken, userName, onBack, onToast, onRe
     }
   };
 
+  const handlePreview = async () => {
+    if (!evaluationId) return;
+    // La pestaña se abre en el propio clic, antes del await, para que el navegador no la bloquee.
+    const tab = window.open("", "_blank");
+    setActing(true);
+    try {
+      const blob = await previewReportPdf(accessToken, evaluationId);
+      const url = URL.createObjectURL(blob);
+      if (tab) tab.location.href = url;
+      else window.open(url, "_blank");
+      window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (err) {
+      tab?.close();
+      onToast(err instanceof Error ? err.message : "No fue posible generar la vista previa del PDF.");
+    } finally {
+      setActing(false);
+    }
+  };
+
   const handleGeneratePdf = async () => {
     if (!evaluationId) return;
     setActing(true);
@@ -1238,6 +1257,7 @@ function ReportReviewDetail({ caso, accessToken, userName, onBack, onToast, onRe
                 disabled={acting}
               />
               <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                <button onClick={handlePreview} disabled={acting} style={{ flex:"1 1 100%", padding:"9px 0", borderRadius:10, cursor:acting?"not-allowed":"pointer", opacity:acting?0.7:1, background:"rgba(59,246,229,0.08)", borderTop:"1px solid rgba(59,246,229,0.3)", borderRight:"1px solid rgba(59,246,229,0.3)", borderBottom:"1px solid rgba(59,246,229,0.3)", borderLeft:"1px solid rgba(59,246,229,0.3)", color:"#3BF6E5", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Ver vista previa del PDF (no oficial)</button>
                 <button onClick={()=>handleDecision("APPROVED")} disabled={acting} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:acting?"not-allowed":"pointer", opacity:acting?0.7:1, background:"rgba(34,197,94,0.12)", borderTop:"1px solid rgba(34,197,94,0.4)", borderRight:"1px solid rgba(34,197,94,0.4)", borderBottom:"1px solid rgba(34,197,94,0.4)", borderLeft:"1px solid rgba(34,197,94,0.4)", color:"#22c55e", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Aprobar</button>
                 <button onClick={()=>handleDecision("RETURNED")} disabled={acting} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:acting?"not-allowed":"pointer", opacity:acting?0.7:1, background:"rgba(246,229,59,0.1)", borderTop:"1px solid rgba(246,229,59,0.38)", borderRight:"1px solid rgba(246,229,59,0.38)", borderBottom:"1px solid rgba(246,229,59,0.38)", borderLeft:"1px solid rgba(246,229,59,0.38)", color:"#F6E53B", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Devolver</button>
                 <button onClick={()=>handleDecision("CORRECTION_REQUESTED")} disabled={acting} style={{ flex:1, padding:"9px 0", borderRadius:10, cursor:acting?"not-allowed":"pointer", opacity:acting?0.7:1, background:"rgba(239,68,68,0.1)", borderTop:"1px solid rgba(239,68,68,0.35)", borderRight:"1px solid rgba(239,68,68,0.35)", borderBottom:"1px solid rgba(239,68,68,0.35)", borderLeft:"1px solid rgba(239,68,68,0.35)", color:"#ef4444", fontSize:"0.72rem", fontWeight:700, fontFamily:"Poppins, sans-serif" }}>Solicitar corrección</button>

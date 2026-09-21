@@ -59,6 +59,10 @@ public static class EvaluationReportEndpoints
             .RequireAuthorization(policy => policy.RequireRole(
                 SystemRoles.Evaluator, SystemRoles.Coordinator, SystemRoles.Administrator));
 
+        endpoints.MapGet("/api/evaluations/{id:int}/report/preview", PreviewAsync)
+            .WithTags("Evaluaciones")
+            .RequireAuthorization(policy => policy.RequireRole(SystemRoles.Coordinator));
+
         endpoints.MapPost("/api/cases/{id:int}/close", CloseCaseAsync)
             .WithTags("Casos")
             .RequireAuthorization(policy => policy.RequireRole(SystemRoles.Coordinator));
@@ -446,6 +450,50 @@ public static class EvaluationReportEndpoints
         return Results.Ok(new SignatureVerificationResponse(
             item.Id, id, hashMatches, signatureValid, hashMatches && signatureValid,
             item.SignatureAlgorithm, item.PublicKeyThumbprint, item.GeneratedAt, item.GeneratedBy));
+    }
+
+    /// <summary>
+    /// Vista previa del informe para el coordinador, antes de que decida: el mismo PDF, con marca de agua
+    /// "NO OFICIAL" y el estado real de la versión vigente. No se guarda ni se firma.
+    /// </summary>
+    private static async Task<IResult> PreviewAsync(
+        int id, EbrDbContext context, IOfficialReportRenderer renderer, CancellationToken cancellationToken)
+    {
+        var report = await context.EvaluationReports.AsNoTracking()
+            .Where(value => value.EvaluationInstanceId == id)
+            .OrderByDescending(value => value.Version)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (report is null) return Results.NotFound();
+
+        var reportContent = await BuildContentAsync(context, id, report, cancellationToken);
+        if (reportContent is null)
+            return Results.Conflict(new { message = "La evaluación no tiene un resultado calculado y no admite vista previa." });
+
+        var observations = await context.EvaluationReportReviews.AsNoTracking()
+            .Where(value => value.ReportId == report.Id)
+            .OrderByDescending(value => value.ReviewedAt)
+            .Select(value => value.Observations)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var approved = report.Status == EvaluationReportDecisions.Approved;
+        var preview = reportContent with
+        {
+            IsPreview = true,
+            ReviewStatusLabel = DescribeReviewStatus(report.Status),
+            ReviewObservations = approved || string.IsNullOrWhiteSpace(observations) ? null : observations
+        };
+
+        // Sin nombre de archivo, el navegador lo muestra en una pestaña en vez de descargarlo.
+        return Results.File(renderer.Render(preview).Content, "application/pdf");
+    }
+
+    private static string DescribeReviewStatus(string reportStatus)
+    {
+        if (reportStatus == EvaluationReportDecisions.Approved) return OfficialReportStatusLabels.Approved;
+        var normalized = reportStatus.ToUpperInvariant();
+        if (normalized.Contains("CORRECTION", StringComparison.Ordinal)) return OfficialReportStatusLabels.CorrectionRequested;
+        if (normalized.Contains("RETURN", StringComparison.Ordinal)) return OfficialReportStatusLabels.Returned;
+        return OfficialReportStatusLabels.Pending;
     }
 
     private static async Task<IResult> CloseCaseAsync(
